@@ -1,14 +1,18 @@
 # gotrue-builder
 
-Builds [supabase/auth](https://github.com/supabase/auth) (GoTrue) from source via GitHub Actions and publishes the resulting binaries as GitHub Releases — so you can install GoTrue on a bare-metal VM without needing a Go toolchain there.
+A small Go CLI that clones a pinned tag of [supabase/auth](https://github.com/supabase/auth) (GoTrue), builds it, and copies the resulting binary into place — run directly on the target machine, no CI involved.
 
 ## Usage
 
-1. Go to **Actions -> Build supabase/auth and publish release -> Run workflow**.
-2. Enter the supabase/auth tag to build (e.g. `v2.196.0`).
-3. When the run finishes, grab the binary for your architecture from this repo's **Releases** page:
-   - `gotrue-auth-linux-amd64`
-   - `gotrue-auth-linux-arm64`
-   - `SHA256SUMS` — verify with `sha256sum -c SHA256SUMS`
+```sh
+go build -o gotrue-builder .
+sudo ./gotrue-builder build                      # builds v2.196.0, installs to /opt/gotrue/gotrue-auth
+./gotrue-builder build -version v2.197.0 -dest /opt/gotrue
+```
 
-Binaries are statically linked (`CGO_ENABLED=0`) and built directly from the tagged upstream source — this repo doesn't modify GoTrue's code, it only builds and republishes it.
+Flags:
+- `-version` — supabase/auth tag to build (default `v2.196.0`)
+- `-dest` — directory the binary is copied into (default `/opt/gotrue`)
+- `-workdir` — where the source gets cloned (default `.gotrue-builder-src`); re-running with the same version reuses the existing clone instead of re-cloning
+
+The binary at `<dest>/gotrue-auth` is what you point your systemd unit(s) at. This repo doesn't modify GoTrue's source — it only clones the tagged upstream code and builds it as-is.
