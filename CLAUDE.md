@@ -46,7 +46,16 @@ internal/gotruectl/          — all real code, single package, flat files:
   doctor.go                    active health probe (docker/postgres/tenant
                                 /health/backup freshness), non-zero exit on
                                 failure — status/tenant config show state,
-                                doctor actually checks it
+                                doctor actually checks it. gatherDoctorChecks()
+                                is the pure data-gathering step, shared with:
+  dashboard.go                 same checks as doctor.go, live in a bubbletea
+                                TUI (5s auto-refresh, q to quit) — renders via
+                                ui.go's renderTable, NOT bubbles/table (see
+                                below)
+  caddyfile.go                 generates a security-hardened Caddy reverse-
+                                proxy config: allowlists GoTrue's public
+                                routes only, default-denies everything else
+                                including /admin/*
   key.go, admin.go             service_role JWT minting + Admin API calls
   build.go                     phase-2: build supabase/auth from source
   selfupdate.go                `go install` wrapper
@@ -76,14 +85,27 @@ this project's actual size.
   `update` are all on-demand commands, explicitly chosen over a daemon when
   asked. Wire your own cron/systemd timer around them if you want automatic
   backups — that's out of scope for this tool.
-- **No reverse proxy / TLS** — out of scope. `update run`'s "a few seconds
-  of downtime during the swap" limitation is a direct, accepted consequence
-  of this (Docker can't bind two containers to one host port at once).
+- **gotruectl never runs or manages a reverse proxy/TLS itself** —
+  `caddyfile` generates a *config file* (allowlist-only, default-deny,
+  security headers) but never touches a running Caddy install, reloads it,
+  or manages certificates. `update run`'s "a few seconds of downtime during
+  the swap" limitation is a direct, accepted consequence of staying out of
+  that layer (Docker can't bind two containers to one host port at once).
 - **No automatic "check for latest GoTrue version."** `update run --version`
   is always explicit; no network call to GitHub releases.
 - **No backup restore command** — restoring is materially riskier than
   backing up and wasn't asked for. Manual restore: `gunzip |
   docker exec -i postgres psql -U postgres -d gotrue_<name>`.
+- **`bubbles/table` doesn't handle ANSI-styled cell content correctly** —
+  found by actually running `dashboard` in a `tmux` pane (see the
+  `smoke-test` skill): embedding `lipgloss`-colored status text into
+  `bubbles/table` cells silently mis-truncated both that cell and ate
+  characters from the next column. `dashboard.go` renders via `ui.go`'s
+  plain `renderTable` (lipgloss/table, already verified to handle ANSI
+  correctly) inside `View()` instead — `bubbles` isn't a dependency at all.
+  Don't reach for `bubbles/table` for colored cells without re-verifying
+  this upstream, and don't add it as a dependency for a view that (like
+  `dashboard`) doesn't actually need selection/scrolling.
 
 ## Working here
 

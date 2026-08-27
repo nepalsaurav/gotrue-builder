@@ -151,6 +151,34 @@ wait_healthy 19999 "kyc after config set"
 grep -q "no changes" /tmp/config-set-noop.out && pass "tenant config set is a no-op when nothing changed" || fail "tenant config set should have reported no changes"
 rm -f /tmp/config-set-noop.out
 
+step "caddyfile: security-hardened reverse-proxy config generation"
+CADDY_OUT=$("$BIN" caddyfile --tenant kyc --domain auth.example.com)
+echo "$CADDY_OUT" | grep -q "auth.example.com {" && pass "caddyfile targets the right domain" || fail "caddyfile missing domain block"
+echo "$CADDY_OUT" | grep -q "reverse_proxy 127.0.0.1:19999" && pass "caddyfile proxies to the right port" || fail "caddyfile has wrong/missing proxy target"
+echo "$CADDY_OUT" | grep -q "Strict-Transport-Security" && pass "caddyfile sets HSTS" || fail "caddyfile missing security headers"
+echo "$CADDY_OUT" | grep -qE "^\s*@public path .*/admin" && fail "caddyfile's allowlist must never include /admin" || pass "caddyfile allowlist excludes /admin"
+echo "$CADDY_OUT" | grep -q 'respond "Not Found" 404' && pass "caddyfile default-denies everything not allowlisted" || fail "caddyfile missing default-deny catch-all"
+"$BIN" caddyfile --tenant kyc --domain auth.example.com --out /tmp/gotruectl-caddytest.Caddyfile >/dev/null
+[ -f /tmp/gotruectl-caddytest.Caddyfile ] && pass "caddyfile --out writes a file" || fail "caddyfile --out did not write a file"
+rm -f /tmp/gotruectl-caddytest.Caddyfile
+"$BIN" caddyfile --all --domain-template '{tenant}.auth.example.com' | grep -q "admin.auth.example.com {" && pass "caddyfile --all covers every tenant" || fail "caddyfile --all missing a tenant block"
+
+step "dashboard: TUI starts, shows live data, and quits cleanly"
+if command -v tmux >/dev/null 2>&1; then
+	tmux kill-session -t gotruectl-dashboard-test 2>/dev/null
+	tmux new-session -d -s gotruectl-dashboard-test -x 100 -y 30 "$BIN dashboard"
+	sleep 3
+	PANE=$(tmux capture-pane -p -t gotruectl-dashboard-test)
+	echo "$PANE" | grep -qi "gotruectl dashboard" && pass "dashboard renders its title" || fail "dashboard did not render"
+	echo "$PANE" | grep -q "postgres" && echo "$PANE" | grep -qi "OK" && pass "dashboard shows live postgres status" || fail "dashboard did not show postgres status"
+	echo "$PANE" | grep -q "tenant kyc" && pass "dashboard shows the kyc tenant" || fail "dashboard did not show kyc"
+	tmux send-keys -t gotruectl-dashboard-test "q"
+	sleep 1
+	tmux has-session -t gotruectl-dashboard-test 2>/dev/null && { fail "dashboard did not quit on q"; tmux kill-session -t gotruectl-dashboard-test 2>/dev/null; } || pass "dashboard quits cleanly on q"
+else
+	echo "tmux not available — skipping dashboard interactive check"
+fi
+
 step "update rotate-jwt-secret"
 OLD_SECRET=$(grep GOTRUE_JWT_SECRET "$HOME/.gotrue-builder/tenants/kyc.env")
 "$BIN" update rotate-jwt-secret --tenant kyc

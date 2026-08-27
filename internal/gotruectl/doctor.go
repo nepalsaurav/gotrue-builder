@@ -33,12 +33,27 @@ type doctorCheck struct {
 }
 
 func runDoctor() error {
+	checks := gatherDoctorChecks()
+	printDoctorReport(checks)
+
+	for _, c := range checks {
+		if !c.ok && !c.warn {
+			return fmt.Errorf("one or more checks failed")
+		}
+	}
+	return nil
+}
+
+// gatherDoctorChecks is the pure probing step, with no printing or exit
+// code — shared by `doctor` (one-shot report) and `dashboard` (the same
+// checks, re-run on a timer). Never returns an error itself: a failure to
+// probe something becomes a failed doctorCheck, not a Go error, so a
+// caller always gets a full checks slice to render.
+func gatherDoctorChecks() []doctorCheck {
 	var checks []doctorCheck
 
 	if err := dockerAvailable(); err != nil {
-		checks = append(checks, doctorCheck{"docker", false, false, err.Error()})
-		printDoctorReport(checks)
-		return fmt.Errorf("docker is not available — nothing else can be checked")
+		return append(checks, doctorCheck{"docker", false, false, err.Error()})
 	}
 	checks = append(checks, doctorCheck{"docker", true, false, "reachable"})
 
@@ -74,14 +89,7 @@ func runDoctor() error {
 		}
 	}
 
-	printDoctorReport(checks)
-
-	for _, c := range checks {
-		if !c.ok && !c.warn {
-			return fmt.Errorf("one or more checks failed")
-		}
-	}
-	return nil
+	return checks
 }
 
 func tenantHealthCheck(tenant string, c containerInfo) doctorCheck {

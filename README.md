@@ -155,6 +155,52 @@ stale is its last backup. Prints one `OK`/`WARN`/`FAIL` row per check plus
 a summary line, and **exits non-zero if anything failed** — safe to use in
 a cron job or CI step, not just interactively.
 
+### `dashboard` — live-updating terminal view of the same checks
+
+```sh
+gotruectl dashboard
+```
+
+An interactive, auto-refreshing (every 5s) view of exactly what `doctor`
+checks — for when you want to just leave a terminal open and watch. Press
+`r` to refresh immediately, `q`/`ctrl+c`/`esc` to quit. Built with
+[bubbletea](https://github.com/charmbracelet/bubbletea) (Charm) for the
+event loop, reusing the same `lipgloss`-based table every other command
+uses for rendering.
+
+### `caddyfile` — generate a security-hardened reverse-proxy config
+
+```sh
+gotruectl caddyfile --tenant kyc --domain auth.example.com [--out Caddyfile]
+gotruectl caddyfile --all --domain-template '{tenant}.auth.example.com' [--out Caddyfile]
+```
+
+Generates a [Caddy](https://caddyserver.com) config that forwards **only**
+GoTrue's public, end-user routes (signup, login, password recovery,
+OTP/email verification, MFA enrollment for a user's own factors, OAuth
+callback) to the tenant. Everything else — including every `/admin/*`
+route — gets a plain `404` by default, because this is an **allowlist**,
+not a blocklist of admin routes: a route missing from the allowlist just
+breaks a user-facing flow, visibly and immediately; a route missing from a
+blocklist would silently stay exposed. Also sets `Strict-Transport-Security`,
+`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, strips the
+`Server` header, and enables access logging.
+
+**Verify the route allowlist against your actual GoTrue version** (in
+`caddyfile.go`, `publicGoTrueRoutes`) before relying on this in
+production — routes can change between GoTrue releases and this list isn't
+guaranteed exhaustive. This command never touches a running Caddy install;
+it only prints or writes the config — validate it yourself before
+deploying:
+```sh
+caddy validate --config Caddyfile --adapter caddyfile
+```
+
+**Never proxy `/admin/*` publicly, ever.** Only your own backend should
+call it, over the internal network, using a `service_role` token minted
+from the tenant's own `GOTRUE_JWT_SECRET` (`gotruectl key` / `gotruectl
+admin`) — that's the entire point of this command existing.
+
 ### `backup` — dump tenant user data
 
 ```sh

@@ -20,13 +20,26 @@ cd <this repo>
 ```
 
 Requires: Docker running, outbound network access (it pulls `postgres`,
-`mailpit`, `redis`, and `supabase/auth` images), and ports `19999`, `19998`,
-`8025`, `1025` free on the host.
+`mailpit`, `redis`, and `supabase/auth` images), `tmux` for the `dashboard`
+check (skipped with a note if absent), and ports `19999`, `19998`, `8025`,
+`1025` free on the host.
 
 Takes a few minutes — it really does create two tenants, provision a real
 admin user, run three different `update` scenarios (success, rollback,
-pull-failure), rotate a JWT secret, and check file permissions and
-secret-echo behavior, not shortcuts of any of that.
+pull-failure), rotate a JWT secret, generate and inspect a Caddy config,
+drive the `dashboard` TUI in a real `tmux` pane, and check file permissions
+and secret-echo behavior — not shortcuts of any of that.
+
+**Testing a bubbletea TUI** (`dashboard`): you can't pipe keystrokes into
+an interactive terminal app the normal way, so the script spawns it inside
+`tmux new-session -d ... "$BIN dashboard"`, waits for it to render,
+`tmux capture-pane -p` to read the actual rendered screen (assert on that
+text, same as any other command's stdout), then `tmux send-keys ... "q"`
+and confirms the session ended. This caught a real bug once — `bubbles/table`
+silently mis-rendering ANSI-colored cells — that no amount of code review
+would have (see `CLAUDE.md`'s non-negotiable-decisions list). Extend this
+pattern for any future interactive/TUI command rather than skipping
+coverage for it because it's "just a UI."
 
 ## What "done" means
 

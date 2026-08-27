@@ -355,3 +355,54 @@ this document.
   real release (`v0.1.0`) — a semver tag makes `@latest` resolution
   correct regardless of default-branch state, which the `release` skill
   now encodes as the required step, not an optional nicety.
+
+## v2.2: dashboard, caddyfile, tenant config rework — done
+
+- **`tenant config`** reworked after direct feedback ("why don't I see all
+  config... make it vertical, one tenant at a time"): was a multi-tenant
+  horizontal table showing a curated 7-field subset. Now `--name` is
+  required and it prints one tenant's *complete* `.env` content vertically
+  (grouped by concern, not alphabetically), with only the three actual
+  secrets (`GOTRUE_JWT_SECRET`, `DATABASE_URL`, `GOTRUE_SMTP_PASS`) masked.
+  Any key not in the known grouping still shows up, sorted — this view can
+  never hide a real setting again.
+- **`doctor`**: active health probe (docker reachable, postgres accepting
+  connections, each tenant's real `/health` response, backup freshness),
+  distinct from `status`/`tenant config` which only show state. Non-zero
+  exit on failure, usable in cron/CI. Refactored into a pure
+  `gatherDoctorChecks()` with no printing, specifically so `dashboard`
+  could reuse it without duplicating the probing logic.
+- **`dashboard`**: the same checks, live, auto-refreshing every 5s, in an
+  interactive `bubbletea` TUI. **Real bug found and fixed via testing, not
+  review**: the first version used `bubbles/table` for rendering and
+  embedded `lipgloss`-colored "OK"/"WARN"/"FAIL" text into its cells —
+  this silently mis-truncated both that cell and ate the first character
+  of the next column's text (verified by driving the actual TUI in a
+  `tmux` pane and reading the rendered screen with `capture-pane`, since
+  you can't pipe keystrokes into an interactive terminal app the normal
+  way). `bubbles/table` doesn't correctly account for ANSI escape codes
+  when computing cell width. Fixed by dropping `bubbles` as a dependency
+  entirely and rendering via the same `renderTable` (lipgloss/table)
+  helper every other command already uses and had already verified
+  handles ANSI-colored cells correctly — `dashboard` never needed
+  `bubbles/table`'s selection/scrolling features anyway, since it's a
+  read-only view. The `smoke-test` skill now documents this
+  `tmux new-session -d ... / capture-pane / send-keys` pattern for testing
+  any future interactive command.
+- **`caddyfile`**: generates a Caddy reverse-proxy config restricted to
+  GoTrue's public, end-user routes only (signup/login/recovery/OTP/
+  MFA-for-own-factors/OAuth callback) — explicitly an **allowlist**, not a
+  blocklist of `/admin/*`: prompted by the user's explicit ask ("security
+  is my core concern") after asking how the "don't expose /admin/*
+  publicly" advice is actually achieved. An allowlist fails safe (a
+  missing public route breaks visibly); a blocklist missing a route would
+  silently leave it exposed. Also sets HSTS/X-Content-Type-Options/
+  X-Frame-Options/Referrer-Policy, strips the `Server` header, and enables
+  access logging. Deliberately documented as unverified by an actual
+  `caddy validate` run — Caddy isn't installed on the dev machine this was
+  built on, and downloading a binary just to self-validate wasn't judged
+  worth doing without asking; the generated output tells the operator to
+  run `caddy validate --config <file> --adapter caddyfile` themselves
+  before deploying, and the route allowlist is explicitly flagged as
+  "verify against your GoTrue version, not guaranteed exhaustive" rather
+  than presented as authoritative.

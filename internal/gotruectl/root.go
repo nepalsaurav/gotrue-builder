@@ -37,6 +37,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newTenantCmd())
 	cmd.AddCommand(newStatusCmd())
 	cmd.AddCommand(newDoctorCmd())
+	cmd.AddCommand(newDashboardCmd())
+	cmd.AddCommand(newCaddyfileCmd())
 	cmd.AddCommand(newBackupCmd())
 	cmd.AddCommand(newUpdateCmd())
 	cmd.AddCommand(newKeyCmd())
