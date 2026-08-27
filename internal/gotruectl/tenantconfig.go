@@ -3,6 +3,7 @@ package gotruectl
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -42,6 +43,8 @@ var tenantConfigKeyOrder = []string{
 	"GOTRUE_DB_DRIVER", "GOTRUE_DB_NAMESPACE", "DATABASE_URL",
 	"GOTRUE_EXTERNAL_EMAIL_ENABLED", "GOTRUE_SMTP_HOST", "GOTRUE_SMTP_PORT",
 	"GOTRUE_SMTP_USER", "GOTRUE_SMTP_PASS", "GOTRUE_SMTP_ADMIN_EMAIL", "GOTRUE_SMTP_SENDER_NAME",
+	"GOTRUE_RATE_LIMIT_HEADER", "GOTRUE_RATE_LIMIT_EMAIL_SENT", "GOTRUE_RATE_LIMIT_SMS_SENT",
+	"GOTRUE_RATE_LIMIT_OTP", "GOTRUE_RATE_LIMIT_TOKEN_REFRESH", "GOTRUE_RATE_LIMIT_VERIFY",
 }
 
 var tenantConfigSecretKeys = map[string]bool{
@@ -134,18 +137,25 @@ func tenantConfigShow(name string) error {
 
 func newTenantConfigSetCmd() *cobra.Command {
 	var (
-		name           string
-		siteURL        string
-		externalURL    string
-		jwtAud         string
-		signup         bool
-		smtpHost       string
-		smtpPort       string
-		smtpUser       string
-		smtpPass       string
-		smtpAdminEmail string
-		smtpSenderName string
-		timeout        time.Duration
+		name            string
+		siteURL         string
+		externalURL     string
+		jwtAud          string
+		signup          bool
+		smtpHost        string
+		smtpPort        string
+		smtpUser        string
+		smtpPass        string
+		smtpAdminEmail  string
+		smtpSenderName  string
+		rateLimitHeader string
+		rateLimitEmail  string
+		rateLimitSMS    string
+		rateLimitOTP    string
+		rateLimitToken  string
+		rateLimitVerify string
+		extraEnv        []string
+		timeout         time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "set",
@@ -216,9 +226,34 @@ invalid" warning, which a generic config-set command shouldn't bury).`,
 				}
 				changes["GOTRUE_EXTERNAL_EMAIL_ENABLED"] = enabled
 			}
+			if f.Changed("rate-limit-header") {
+				changes["GOTRUE_RATE_LIMIT_HEADER"] = rateLimitHeader
+			}
+			if f.Changed("rate-limit-email-sent") {
+				changes["GOTRUE_RATE_LIMIT_EMAIL_SENT"] = rateLimitEmail
+			}
+			if f.Changed("rate-limit-sms-sent") {
+				changes["GOTRUE_RATE_LIMIT_SMS_SENT"] = rateLimitSMS
+			}
+			if f.Changed("rate-limit-otp") {
+				changes["GOTRUE_RATE_LIMIT_OTP"] = rateLimitOTP
+			}
+			if f.Changed("rate-limit-token-refresh") {
+				changes["GOTRUE_RATE_LIMIT_TOKEN_REFRESH"] = rateLimitToken
+			}
+			if f.Changed("rate-limit-verify") {
+				changes["GOTRUE_RATE_LIMIT_VERIFY"] = rateLimitVerify
+			}
+			for _, kv := range extraEnv {
+				key, value, ok := strings.Cut(kv, "=")
+				if !ok {
+					return fmt.Errorf("--set %q is not in KEY=VALUE form", kv)
+				}
+				changes[key] = value
+			}
 
 			if len(changes) == 0 {
-				return fmt.Errorf("no changes given — pass at least one of --site-url, --external-url, --jwt-aud, --signup, --smtp-*")
+				return fmt.Errorf("no changes given — pass at least one of --site-url, --external-url, --jwt-aud, --signup, --smtp-*, --rate-limit-*, --set")
 			}
 
 			changed, err := applyEnvChangesAndRestart(cfg, name, changes, timeout)
@@ -244,6 +279,13 @@ invalid" warning, which a generic config-set command shouldn't bury).`,
 	cmd.Flags().StringVar(&smtpPass, "smtp-pass", "", "SMTP password")
 	cmd.Flags().StringVar(&smtpAdminEmail, "smtp-admin-email", "", "SMTP from-address")
 	cmd.Flags().StringVar(&smtpSenderName, "smtp-sender-name", "", "SMTP from-name")
+	cmd.Flags().StringVar(&rateLimitHeader, "rate-limit-header", "", "header GoTrue reads the client IP from for rate limiting (e.g. X-Forwarded-For — required if behind a reverse proxy)")
+	cmd.Flags().StringVar(&rateLimitEmail, "rate-limit-email-sent", "", "emails per hour before rate limiting; also accepts N/duration, e.g. 10/30m")
+	cmd.Flags().StringVar(&rateLimitSMS, "rate-limit-sms-sent", "", "SMS OTPs per hour before rate limiting; also accepts N/duration")
+	cmd.Flags().StringVar(&rateLimitOTP, "rate-limit-otp", "", "signup/recovery/magic-link/OTP requests per 5 minutes before rate limiting")
+	cmd.Flags().StringVar(&rateLimitToken, "rate-limit-token-refresh", "", "token refreshes per 5 minutes before rate limiting")
+	cmd.Flags().StringVar(&rateLimitVerify, "rate-limit-verify", "", "/verify calls per 5 minutes before rate limiting")
+	cmd.Flags().StringArrayVar(&extraEnv, "set", nil, "set an arbitrary GOTRUE_* env var not covered by a named flag, as KEY=VALUE (repeatable)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "how long to wait for the container to come back healthy before rolling back")
 	return cmd
 }

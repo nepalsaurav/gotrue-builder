@@ -28,19 +28,26 @@ func newTenantCmd() *cobra.Command {
 
 func newTenantCreateCmd() *cobra.Command {
 	var (
-		name           string
-		port           int
-		signup         bool
-		siteURL        string
-		externalURL    string
-		jwtSecret      string
-		jwtAud         string
-		smtpHost       string
-		smtpPort       string
-		smtpUser       string
-		smtpPass       string
-		smtpAdminEmail string
-		smtpSenderName string
+		name            string
+		port            int
+		signup          bool
+		siteURL         string
+		externalURL     string
+		jwtSecret       string
+		jwtAud          string
+		smtpHost        string
+		smtpPort        string
+		smtpUser        string
+		smtpPass        string
+		smtpAdminEmail  string
+		smtpSenderName  string
+		rateLimitHeader string
+		rateLimitEmail  string
+		rateLimitSMS    string
+		rateLimitOTP    string
+		rateLimitToken  string
+		rateLimitVerify string
+		extraEnv        []string
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -52,26 +59,34 @@ func newTenantCreateCmd() *cobra.Command {
 			}
 			f := cmd.Flags()
 			opts := tenantCreateOpts{
-				name:           name,
-				nameSet:        f.Changed("name"),
-				port:           port,
-				portSet:        f.Changed("port"),
-				signup:         signup,
-				signupSet:      f.Changed("signup"),
-				siteURL:        siteURL,
-				siteURLSet:     f.Changed("site-url"),
-				externalURL:    externalURL,
-				externalURLSet: f.Changed("external-url"),
-				jwtSecret:      jwtSecret,
-				jwtSecretSet:   f.Changed("jwt-secret"),
-				jwtAud:         jwtAud,
-				jwtAudSet:      f.Changed("jwt-aud"),
-				smtpHost:       smtpHost,
-				smtpPort:       smtpPort,
-				smtpUser:       smtpUser,
-				smtpPass:       smtpPass,
-				smtpAdminEmail: smtpAdminEmail,
-				smtpSenderName: smtpSenderName,
+				name:               name,
+				nameSet:            f.Changed("name"),
+				port:               port,
+				portSet:            f.Changed("port"),
+				signup:             signup,
+				signupSet:          f.Changed("signup"),
+				siteURL:            siteURL,
+				siteURLSet:         f.Changed("site-url"),
+				externalURL:        externalURL,
+				externalURLSet:     f.Changed("external-url"),
+				jwtSecret:          jwtSecret,
+				jwtSecretSet:       f.Changed("jwt-secret"),
+				jwtAud:             jwtAud,
+				jwtAudSet:          f.Changed("jwt-aud"),
+				smtpHost:           smtpHost,
+				smtpPort:           smtpPort,
+				smtpUser:           smtpUser,
+				smtpPass:           smtpPass,
+				smtpAdminEmail:     smtpAdminEmail,
+				smtpSenderName:     smtpSenderName,
+				rateLimitHeader:    rateLimitHeader,
+				rateLimitHeaderSet: f.Changed("rate-limit-header"),
+				rateLimitEmail:     rateLimitEmail,
+				rateLimitSMS:       rateLimitSMS,
+				rateLimitOTP:       rateLimitOTP,
+				rateLimitToken:     rateLimitToken,
+				rateLimitVerify:    rateLimitVerify,
+				extraEnv:           extraEnv,
 			}
 			if f.Changed("smtp-host") {
 				opts.smtpHostSet = true
@@ -92,6 +107,13 @@ func newTenantCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&smtpPass, "smtp-pass", "", "override the configured SMTP password for this tenant only")
 	cmd.Flags().StringVar(&smtpAdminEmail, "smtp-admin-email", "", "override the configured SMTP from-address for this tenant only")
 	cmd.Flags().StringVar(&smtpSenderName, "smtp-sender-name", "", "override the configured SMTP from-name for this tenant only")
+	cmd.Flags().StringVar(&rateLimitHeader, "rate-limit-header", "X-Forwarded-For", "header GoTrue reads the client IP from for rate limiting — required correct if this tenant sits behind a reverse proxy (e.g. `caddyfile`'s output), or every real user shares one rate-limit bucket keyed to the proxy's IP. Pass \"\" to rate-limit by raw connection IP instead (only correct for tenants never put behind a proxy)")
+	cmd.Flags().StringVar(&rateLimitEmail, "rate-limit-email-sent", "", "emails per hour before rate limiting (GoTrue default: 30); also accepts N/duration, e.g. 10/30m")
+	cmd.Flags().StringVar(&rateLimitSMS, "rate-limit-sms-sent", "", "SMS OTPs per hour before rate limiting (GoTrue default: 30); also accepts N/duration")
+	cmd.Flags().StringVar(&rateLimitOTP, "rate-limit-otp", "", "signup/recovery/magic-link/OTP requests per 5 minutes before rate limiting (GoTrue default: 30) — this is the main brute-force/enumeration control")
+	cmd.Flags().StringVar(&rateLimitToken, "rate-limit-token-refresh", "", "token refreshes per 5 minutes before rate limiting (GoTrue default: 150)")
+	cmd.Flags().StringVar(&rateLimitVerify, "rate-limit-verify", "", "/verify calls per 5 minutes before rate limiting (GoTrue default: 30)")
+	cmd.Flags().StringArrayVar(&extraEnv, "set", nil, "set an arbitrary GOTRUE_* env var not covered by a named flag, as KEY=VALUE (repeatable) — e.g. --set GOTRUE_RATE_LIMIT_ANONYMOUS_USERS=10 --set GOTRUE_MFA_RATE_LIMIT_CHALLENGE_AND_VERIFY=5")
 	return cmd
 }
 
@@ -117,6 +139,15 @@ type tenantCreateOpts struct {
 	smtpPass       string
 	smtpAdminEmail string
 	smtpSenderName string
+
+	rateLimitHeader    string
+	rateLimitHeaderSet bool
+	rateLimitEmail     string
+	rateLimitSMS       string
+	rateLimitOTP       string
+	rateLimitToken     string
+	rateLimitVerify    string
+	extraEnv           []string
 }
 
 func tenantCreate(cfg *Config, o tenantCreateOpts) error {
@@ -272,6 +303,35 @@ func tenantCreate(cfg *Config, o tenantCreateOpts) error {
 			"GOTRUE_SMTP_ADMIN_EMAIL="+resolvedSMTPAdminEmail,
 			"GOTRUE_SMTP_SENDER_NAME="+resolvedSMTPSenderName,
 		)
+	}
+	resolvedRateLimitHeader := o.rateLimitHeader
+	if !o.rateLimitHeaderSet {
+		resolvedRateLimitHeader = "X-Forwarded-For"
+	}
+	if resolvedRateLimitHeader != "" {
+		envLines = append(envLines, "GOTRUE_RATE_LIMIT_HEADER="+resolvedRateLimitHeader)
+	}
+	if o.rateLimitEmail != "" {
+		envLines = append(envLines, "GOTRUE_RATE_LIMIT_EMAIL_SENT="+o.rateLimitEmail)
+	}
+	if o.rateLimitSMS != "" {
+		envLines = append(envLines, "GOTRUE_RATE_LIMIT_SMS_SENT="+o.rateLimitSMS)
+	}
+	if o.rateLimitOTP != "" {
+		envLines = append(envLines, "GOTRUE_RATE_LIMIT_OTP="+o.rateLimitOTP)
+	}
+	if o.rateLimitToken != "" {
+		envLines = append(envLines, "GOTRUE_RATE_LIMIT_TOKEN_REFRESH="+o.rateLimitToken)
+	}
+	if o.rateLimitVerify != "" {
+		envLines = append(envLines, "GOTRUE_RATE_LIMIT_VERIFY="+o.rateLimitVerify)
+	}
+	for _, kv := range o.extraEnv {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			return fmt.Errorf("--set %q is not in KEY=VALUE form", kv)
+		}
+		envLines = append(envLines, key+"="+value)
 	}
 	envLines = append(envLines, "")
 	envContent := strings.Join(envLines, "\n")

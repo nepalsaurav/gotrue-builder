@@ -438,3 +438,48 @@ restore, verify the first user's original password still authenticates
 and the second user is gone — this exact sequence is now
 `scripts/smoke-test.sh`'s "backup restore" step, plus a check that
 restoring without `--yes` and empty stdin aborts without touching data.
+
+## v2.4: rate-limit / brute-force config — done
+
+Offered as one of two options after backup restore shipped (the other:
+external OAuth providers); picked as the higher-priority security gap.
+
+**Verified against actual upstream source, not memory or web search
+summaries** — a web search and an initial `WebFetch` summary both gave
+inconsistent/incomplete env var names for GoTrue's rate limiting. Settled
+by `curl`-ing the raw files directly: `internal/conf/configuration.go` for
+the struct fields and `split_words:"true"` tags, then
+`internal/api/apilimiter/apilimiter.go`, which turned out to document the
+exact env var next to each field in a comment *and* shows the real
+constructor call for each limiter — giving the actual time window per
+setting (`RATE_LIMIT_OTP`/`RATE_LIMIT_VERIFY`/`RATE_LIMIT_TOKEN_REFRESH`:
+per 5 minutes; `RATE_LIMIT_EMAIL_SENT`/`RATE_LIMIT_SMS_SENT`: per hour via
+a custom `Rate` type in `internal/conf/rate.go` that also parses an
+`N/duration` form; `MFA.RateLimitChallengeAndVerify`: per *minute*, nested
+under `GOTRUE_MFA_`) rather than guessed from field-naming conventions.
+
+Implemented as named flags for the settings that matter most
+(`--rate-limit-otp` — covers signup/recovery/magic-link/resend, the actual
+brute-force/enumeration surface — plus email-sent, sms-sent,
+token-refresh, verify, and header) on both `tenant create` and `tenant
+config set`, plus a generic `--set KEY=VALUE` escape hatch (repeatable) on
+both for the long tail of GoTrue settings not worth a dedicated flag
+(Web3, SAML, passkey, anonymous sign-ins, the MFA rate limit, and
+whatever a future GoTrue release adds).
+
+`GOTRUE_RATE_LIMIT_HEADER` defaults to `X-Forwarded-For` on every `tenant
+create` (not opt-in) — found while implementing this that it directly
+interacts with `caddyfile` (v2.2): GoTrue's rate limiter keys on the raw
+TCP connection IP unless told to read a header instead, and behind
+`caddyfile`'s generated reverse proxy every real user's connection arrives
+from Caddy's IP, not their own. Without the override, all users of a
+proxied tenant would share one rate-limit bucket — a footgun tied directly
+to this session's own earlier work, closed proactively rather than left
+for the user to discover.
+
+**Verified empirically, not just config-acceptance**: created a tenant
+with `--rate-limit-otp 1`, fired 35 rapid `/otp` requests, confirmed real
+`429 Too Many Requests` responses came back — proving GoTrue actually
+enforces the value passed through, not just that it accepted an env var
+without crash-looping. Now `scripts/smoke-test.sh`'s "rate limiting" step.
+64 checks total, all passing.

@@ -81,6 +81,21 @@ rm -f "$CREATE_OUT"
 wait_healthy 19999 kyc
 wait_healthy 19998 admin
 
+step "rate limiting: config is actually enforced by GoTrue, not just accepted"
+"$BIN" tenant create --name ratetest --port 19996 --rate-limit-otp 1 --signup </dev/null >/dev/null
+sleep 2
+grep -q "GOTRUE_RATE_LIMIT_HEADER=X-Forwarded-For" "$HOME/.gotrue-builder/tenants/ratetest.env" && pass "rate-limit header defaults to X-Forwarded-For" || fail "rate-limit header default missing"
+grep -q "GOTRUE_RATE_LIMIT_OTP=1" "$HOME/.gotrue-builder/tenants/ratetest.env" && pass "custom --rate-limit-otp applied" || fail "--rate-limit-otp not applied"
+wait_healthy 19996 ratetest
+GOT_429=0
+for i in $(seq 1 35); do
+	st=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:19996/otp \
+		-H "Content-Type: application/json" -d "{\"email\":\"floodtest$i@example.com\",\"create_user\":true}")
+	[ "$st" = "429" ] && GOT_429=1
+done
+[ "$GOT_429" = "1" ] && pass "aggressive --rate-limit-otp actually triggers 429s under load" || fail "expected at least one 429 from the OTP flood, got none"
+"$BIN" tenant delete --name ratetest >/dev/null 2>&1
+
 step "duplicate create is rejected"
 "$BIN" tenant create --name kyc --port 20000 </dev/null 2>/dev/null && fail "duplicate create should have failed" || pass "duplicate create rejected"
 
@@ -150,6 +165,10 @@ wait_healthy 19999 "kyc after config set"
 "$BIN" tenant config set --name kyc --jwt-aud custom-aud >/tmp/config-set-noop.out
 grep -q "no changes" /tmp/config-set-noop.out && pass "tenant config set is a no-op when nothing changed" || fail "tenant config set should have reported no changes"
 rm -f /tmp/config-set-noop.out
+"$BIN" tenant config set --name kyc --rate-limit-verify 50 --set GOTRUE_RATE_LIMIT_ANONYMOUS_USERS=15 --timeout 15s
+grep -q "GOTRUE_RATE_LIMIT_VERIFY=50" "$HOME/.gotrue-builder/tenants/kyc.env" && pass "tenant config set applied --rate-limit-verify" || fail "tenant config set did not apply --rate-limit-verify"
+grep -q "GOTRUE_RATE_LIMIT_ANONYMOUS_USERS=15" "$HOME/.gotrue-builder/tenants/kyc.env" && pass "tenant config set's --set escape hatch works" || fail "tenant config set's --set escape hatch did not apply"
+wait_healthy 19999 "kyc after rate-limit config set"
 
 step "backup restore: full data-integrity round trip (this is the risky one)"
 "$BIN" admin create-user --tenant kyc --email restoreA@example.com --password 'RestoreA123!' --email-confirm >/dev/null

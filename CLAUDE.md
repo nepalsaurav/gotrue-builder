@@ -36,12 +36,18 @@ internal/gotruectl/          — all real code, single package, flat files:
   root.go                      Cobra root command + subcommand wiring
   config.go, configcmd.go      Viper layered config; `config show`/`set-smtp`
   postgres.go                  shared postgres container lifecycle
-  tenant.go                    tenant create/list/logs/start/stop/delete
+  tenant.go                    tenant create/list/logs/start/stop/delete;
+                                also owns GOTRUE_RATE_LIMIT_* flags + the
+                                generic --set KEY=VALUE escape hatch, both
+                                on tenant create and (in tenantconfig.go)
+                                tenant config set
   tenantconfig.go              `tenant config` (single tenant, vertical,
                                 every setting) / `tenant config set`
   update.go                    blue/green swap+rollback (`update run`,
                                 `update rotate-jwt-secret`), shared by both
-  backup.go                    pg_dump-based per-tenant backup
+  backup.go                    pg_dump-based per-tenant backup, plus
+                                `backup restore` — see the non-negotiable-
+                                decisions entry below before touching it
   status.go                    cross-cutting "every GoTrue container" view
   doctor.go                    active health probe (docker/postgres/tenant
                                 /health/backup freshness), non-zero exit on
@@ -118,6 +124,21 @@ this project's actual size.
   Don't reach for `bubbles/table` for colored cells without re-verifying
   this upstream, and don't add it as a dependency for a view that (like
   `dashboard`) doesn't actually need selection/scrolling.
+- **Never guess a `GOTRUE_*` env var's name, unit, or semantics from
+  memory or a web search summary — read the actual upstream source.** Web
+  search results and even `WebFetch`-summarized pages disagreed on the
+  rate-limit variable names before this was checked properly; the
+  authoritative source is `internal/conf/configuration.go` (struct fields,
+  `split_words:"true"` tags) cross-checked against
+  `internal/api/apilimiter/apilimiter.go` (which documents the *exact* env
+  var next to each field in a comment, and shows the real time window each
+  one applies over — `RATE_LIMIT_OTP` and `RATE_LIMIT_VERIFY` are per-5-
+  minutes, `RATE_LIMIT_EMAIL_SENT`/`RATE_LIMIT_SMS_SENT` are per-hour via a
+  custom `Rate` type in `internal/conf/rate.go` that also accepts an
+  `N/duration` form, `MFA.RateLimitChallengeAndVerify` is per-*minute* and
+  nested under a `GOTRUE_MFA_` prefix) — `curl` the raw file, don't trust a
+  paraphrase. Getting this wrong is worse than not having the feature: a
+  silently-ignored or misnamed rate limit is a false sense of security.
 
 ## Working here
 

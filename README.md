@@ -90,12 +90,16 @@ gotruectl postgres down    # stops it; data stays in the gotrue-postgres-data vo
 gotruectl tenant create --name kyc --port 9999 [--signup] \
     [--site-url URL] [--external-url URL] [--jwt-secret SECRET] [--jwt-aud AUD] \
     [--smtp-host H] [--smtp-port P] [--smtp-user U] [--smtp-pass P] \
-    [--smtp-admin-email E] [--smtp-sender-name N]
+    [--smtp-admin-email E] [--smtp-sender-name N] \
+    [--rate-limit-header H] [--rate-limit-email-sent N] [--rate-limit-sms-sent N] \
+    [--rate-limit-otp N] [--rate-limit-token-refresh N] [--rate-limit-verify N] \
+    [--set KEY=VALUE ...]
 gotruectl tenant list
 gotruectl tenant config --name kyc
 gotruectl tenant config set --name kyc [--site-url URL] [--external-url URL] \
     [--jwt-aud AUD] [--signup] [--smtp-host H] [--smtp-port P] [--smtp-user U] \
-    [--smtp-pass P] [--smtp-admin-email E] [--smtp-sender-name N] [--timeout 30s]
+    [--smtp-pass P] [--smtp-admin-email E] [--smtp-sender-name N] \
+    [--rate-limit-* ...] [--set KEY=VALUE ...] [--timeout 30s]
 gotruectl tenant logs --name kyc [--follow]
 gotruectl tenant start --name kyc
 gotruectl tenant stop  --name kyc
@@ -129,6 +133,38 @@ env; automatic rollback if the container doesn't come back healthy). It
 cannot change the host port or JWT secret — recreate the tenant for the
 former, use `update rotate-jwt-secret` for the latter, since that needs its
 own "tokens are now invalid" warning.
+
+**Rate limiting / brute-force protection.** GoTrue rate-limits by default
+(30/hour for emails, 30-per-5-minutes for most endpoints, 150-per-5-minutes
+for token refresh), but every default is exposed and overridable:
+`--rate-limit-otp` is the one that matters most — it covers signup,
+password recovery, magic link, and resend, i.e. the actual brute-force/
+enumeration surface. Values are requests per GoTrue's own fixed window for
+that setting (`--rate-limit-otp`/`--rate-limit-verify`: per 5 minutes;
+`--rate-limit-token-refresh`: per 5 minutes) except
+`--rate-limit-email-sent`/`--rate-limit-sms-sent`, which are per hour and
+also accept an `N/duration` form like `10/30m`. **Verified empirically, not
+just config-acceptance**: setting
+`--rate-limit-otp 1` and firing 35 rapid requests at `/otp` genuinely
+produces `429 Too Many Requests` responses (`scripts/smoke-test.sh`'s
+"rate limiting" step) — GoTrue actually enforces this, it's not a value
+that gets silently ignored.
+
+`--rate-limit-header` defaults to `X-Forwarded-For` on every `tenant
+create`. This matters more than it looks: GoTrue's rate limiter keys on
+the raw TCP connection IP unless told to read a header instead — and if
+this tenant sits behind `caddyfile`'s generated reverse proxy (or any
+proxy), every real user's connection arrives from the proxy's IP, not
+their own. Without the header override, all your users would share a
+single rate-limit bucket, and one user's normal activity could lock
+everyone else out. Pass `--rate-limit-header ""` only for a tenant that
+will genuinely never sit behind a proxy.
+
+Any GoTrue setting not covered by a named flag — the MFA challenge/verify
+rate limit, Web3, SAML, passkey, anonymous sign-ins, or anything added in
+a future GoTrue release — is reachable via the generic escape hatch:
+`--set GOTRUE_RATE_LIMIT_ANONYMOUS_USERS=10` (repeatable), on both
+`tenant create` and `tenant config set`.
 
 ### `status` — every GoTrue container on the host, managed or not
 
