@@ -2,6 +2,7 @@ package gotruectl
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -11,57 +12,123 @@ func newTenantConfigCmd() *cobra.Command {
 	var name string
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Show each tenant's GoTrue configuration in a table",
-		Long: `Unlike "tenant list" (docker-level: state/status/image), this reads each
-tenant's own .env file and shows the GoTrue-level settings that actually
-govern its behavior — port, URLs, JWT audience, signup, SMTP.`,
+		Short: "Show one tenant's full GoTrue configuration",
+		Long: `Unlike "tenant list" (docker-level: state/status/image), this reads the
+tenant's own .env file and shows every GoTrue-level setting that actually
+governs its behavior — not a curated subset. Secrets (JWT secret, DB
+password embedded in DATABASE_URL, SMTP password) are masked to "(set)";
+use "gotruectl key" for the JWT, or read the .env file directly
+(~/.gotrue-builder/tenants/<name>.env) if you need the actual value to
+configure another app.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return tenantConfigList(name)
+			if name == "" {
+				return fmt.Errorf("--name is required")
+			}
+			return tenantConfigShow(name)
 		},
 	}
-	cmd.Flags().StringVar(&name, "name", "", "only show this tenant (default: every gotruectl-managed tenant)")
+	cmd.Flags().StringVar(&name, "name", "", "tenant name (required)")
 	cmd.AddCommand(newTenantConfigSetCmd())
 	return cmd
 }
 
-func tenantConfigList(name string) error {
+// tenantConfigKeyOrder groups settings by concern (network, auth, database,
+// mail) rather than alphabetically, so the vertical output reads like a
+// mental model of the tenant top-to-bottom instead of a random env dump.
+var tenantConfigKeyOrder = []string{
+	"API_EXTERNAL_URL", "GOTRUE_SITE_URL", "GOTRUE_API_HOST", "PORT",
+	"GOTRUE_JWT_AUD", "GOTRUE_JWT_EXP", "GOTRUE_JWT_SECRET",
+	"GOTRUE_DISABLE_SIGNUP",
+	"GOTRUE_DB_DRIVER", "GOTRUE_DB_NAMESPACE", "DATABASE_URL",
+	"GOTRUE_EXTERNAL_EMAIL_ENABLED", "GOTRUE_SMTP_HOST", "GOTRUE_SMTP_PORT",
+	"GOTRUE_SMTP_USER", "GOTRUE_SMTP_PASS", "GOTRUE_SMTP_ADMIN_EMAIL", "GOTRUE_SMTP_SENDER_NAME",
+}
+
+var tenantConfigSecretKeys = map[string]bool{
+	"GOTRUE_JWT_SECRET": true,
+	"DATABASE_URL":      true,
+	"GOTRUE_SMTP_PASS":  true,
+}
+
+func tenantConfigShow(name string) error {
+	containerName := "gotrue-" + name
+	exists, _, err := containerState(containerName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("no such tenant %q", name)
+	}
+
+	envPath, err := tenantEnvPath(name)
+	if err != nil {
+		return err
+	}
+	env, err := parseEnvFile(envPath)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", envPath, err)
+	}
+
 	containers, err := listContainersByLabel(managedByLabel, "role=gotrue")
 	if err != nil {
 		return err
 	}
-	if len(containers) == 0 {
-		printMuted("no tenants")
-		return nil
+	var hostPort, state, status, image string
+	for _, c := range containers {
+		if c.label("tenant") == name {
+			hostPort, state, status, image = extractHostPort(c.Ports), c.State, c.Status, c.Image
+		}
 	}
 
-	var rows [][]string
-	for _, c := range containers {
-		tenant := c.label("tenant")
-		if name != "" && tenant != name {
-			continue
-		}
-		envPath, err := tenantEnvPath(tenant)
-		if err != nil {
-			return err
-		}
-		env, err := parseEnvFile(envPath)
-		if err != nil {
-			rows = append(rows, []string{tenant, extractHostPort(c.Ports), fmt.Sprintf("(could not read env file: %v)", err), "", "", "", ""})
-			continue
-		}
-		signup := "disabled"
-		if env["GOTRUE_DISABLE_SIGNUP"] == "false" {
-			signup = "enabled"
-		}
-		smtpHost := env["GOTRUE_SMTP_HOST"]
-		if smtpHost == "" {
-			smtpHost = "-"
-		}
-		rows = append(rows, []string{
-			tenant, extractHostPort(c.Ports), env["API_EXTERNAL_URL"], env["GOTRUE_SITE_URL"], env["GOTRUE_JWT_AUD"], signup, smtpHost,
-		})
+	rows := [][]string{
+		{"TENANT", name},
+		{"CONTAINER", containerName},
+		{"STATE", state},
+		{"STATUS", status},
+		{"IMAGE", image},
+		{"HOST_PORT", hostPort},
 	}
-	fmt.Println(renderTable([]string{"NAME", "PORT", "EXTERNAL_URL", "SITE_URL", "JWT_AUD", "SIGNUP", "SMTP_HOST"}, rows))
+
+	seen := map[string]bool{}
+	for _, key := range tenantConfigKeyOrder {
+		v, ok := env[key]
+		if !ok {
+			continue
+		}
+		seen[key] = true
+		if tenantConfigSecretKeys[key] {
+			v = maskSecret(v)
+		}
+		rows = append(rows, []string{key, v})
+		if key == "GOTRUE_DISABLE_SIGNUP" {
+			signup := "enabled"
+			if v != "false" {
+				signup = "disabled"
+			}
+			rows = append(rows, []string{"  (public signup)", signup})
+		}
+	}
+
+	// Anything in the file but not in the known order — e.g. a GOTRUE_*
+	// setting added by hand — still shows up, sorted, so this view can
+	// never hide a real setting the way the old curated-column table did.
+	var extra []string
+	for k := range env {
+		if !seen[k] {
+			extra = append(extra, k)
+		}
+	}
+	sort.Strings(extra)
+	for _, key := range extra {
+		v := env[key]
+		if tenantConfigSecretKeys[key] {
+			v = maskSecret(v)
+		}
+		rows = append(rows, []string{key, v})
+	}
+
+	fmt.Println(renderTable([]string{"SETTING", "VALUE"}, rows))
+	printMuted("secrets are masked — `gotruectl key --tenant %s` or the .env file has the real values", name)
 	return nil
 }
 

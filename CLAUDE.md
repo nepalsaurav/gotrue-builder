@@ -37,14 +37,22 @@ internal/gotruectl/          — all real code, single package, flat files:
   config.go, configcmd.go      Viper layered config; `config show`/`set-smtp`
   postgres.go                  shared postgres container lifecycle
   tenant.go                    tenant create/list/logs/start/stop/delete
-  tenantconfig.go              `tenant config` (table) / `tenant config set`
+  tenantconfig.go              `tenant config` (single tenant, vertical,
+                                every setting) / `tenant config set`
   update.go                    blue/green swap+rollback (`update run`,
                                 `update rotate-jwt-secret`), shared by both
   backup.go                    pg_dump-based per-tenant backup
   status.go                    cross-cutting "every GoTrue container" view
+  doctor.go                    active health probe (docker/postgres/tenant
+                                /health/backup freshness), non-zero exit on
+                                failure — status/tenant config show state,
+                                doctor actually checks it
   key.go, admin.go             service_role JWT minting + Admin API calls
   build.go                     phase-2: build supabase/auth from source
   selfupdate.go                `go install` wrapper
+  ui.go                        lipgloss styling — tables + success/warn/
+                                error messages; NEVER used on key's token
+                                or admin's JSON output (must stay pipeable)
   docker.go, paths.go,
   prompt.go, util.go           low-level helpers (exec wrappers, env file
                                 parsing, path resolution, interactive prompts)

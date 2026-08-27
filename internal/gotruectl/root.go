@@ -36,6 +36,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newPostgresCmd())
 	cmd.AddCommand(newTenantCmd())
 	cmd.AddCommand(newStatusCmd())
+	cmd.AddCommand(newDoctorCmd())
 	cmd.AddCommand(newBackupCmd())
 	cmd.AddCommand(newUpdateCmd())
 	cmd.AddCommand(newKeyCmd())

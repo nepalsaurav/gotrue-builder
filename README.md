@@ -92,7 +92,7 @@ gotruectl tenant create --name kyc --port 9999 [--signup] \
     [--smtp-host H] [--smtp-port P] [--smtp-user U] [--smtp-pass P] \
     [--smtp-admin-email E] [--smtp-sender-name N]
 gotruectl tenant list
-gotruectl tenant config [--name kyc]
+gotruectl tenant config --name kyc
 gotruectl tenant config set --name kyc [--site-url URL] [--external-url URL] \
     [--jwt-aud AUD] [--signup] [--smtp-host H] [--smtp-port P] [--smtp-user U] \
     [--smtp-pass P] [--smtp-admin-email E] [--smtp-sender-name N] [--timeout 30s]
@@ -112,15 +112,23 @@ override, so you're not asked to re-enter mail server credentials on every
 Ensures Postgres is up automatically. Reminder printed on every create:
 don't expose a tenant's `/admin/*` routes to the public internet.
 
-`tenant config` prints a table of every tenant's actual GoTrue-level
-settings (port, URLs, JWT audience, signup, SMTP host) read back from its
-`.env` file — `tenant list` only shows docker-level state/status/image, not
-these. `tenant config set` edits one or more of those settings and applies
-them via the same safe blue/green swap `update run` uses (same image, just
-the updated env; automatic rollback if the container doesn't come back
-healthy). It cannot change the host port or JWT secret — recreate the
-tenant for the former, use `update rotate-jwt-secret` for the latter, since
-that needs its own "tokens are now invalid" warning.
+`tenant config --name kyc` shows **that one tenant's** full GoTrue-level
+configuration, vertically (one setting per row) — every key in its `.env`
+file, not a curated subset, grouped by concern (network, auth, database,
+mail) rather than alphabetically. `tenant list` only shows docker-level
+state/status/image, not any of this. Secrets (`GOTRUE_JWT_SECRET`,
+`DATABASE_URL`, `GOTRUE_SMTP_PASS`) show as `(set)` rather than their
+actual value — use `gotruectl key` for the JWT, or read
+`~/.gotrue-builder/tenants/<name>.env` directly if you need the real value
+to configure another app (e.g. a backend that verifies GoTrue-issued
+tokens needs the same `GOTRUE_JWT_SECRET`).
+
+`tenant config set` edits one or more settings and applies them via the
+same safe blue/green swap `update run` uses (same image, just the updated
+env; automatic rollback if the container doesn't come back healthy). It
+cannot change the host port or JWT secret — recreate the tenant for the
+former, use `update rotate-jwt-secret` for the latter, since that needs its
+own "tokens are now invalid" warning.
 
 ### `status` — every GoTrue container on the host, managed or not
 
@@ -133,6 +141,19 @@ Unlike `tenant list` (gotruectl-managed tenants only), this scans for
 instance started some other way (e.g. a hand-written docker-compose stack)
 if one happens to be running alongside, with a `MANAGED` column to tell
 them apart.
+
+### `doctor` — health check for the whole system
+
+```sh
+gotruectl doctor
+```
+
+`status` and `tenant config` show *state* (what's there, what it's set to);
+`doctor` actively *probes* it: is Docker reachable, is Postgres accepting
+connections, does each tenant's real `/health` endpoint respond, and how
+stale is its last backup. Prints one `OK`/`WARN`/`FAIL` row per check plus
+a summary line, and **exits non-zero if anything failed** — safe to use in
+a cron job or CI step, not just interactively.
 
 ### `backup` — dump tenant user data
 

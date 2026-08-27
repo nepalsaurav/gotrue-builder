@@ -36,6 +36,10 @@ func printWarn(format string, a ...any) {
 	fmt.Println(warnStyle.Render(fmt.Sprintf(format, a...)))
 }
 
+func printError(format string, a ...any) {
+	fmt.Println(errorStyle.Render(fmt.Sprintf(format, a...)))
+}
+
 func printMuted(format string, a ...any) {
 	fmt.Println(mutedStyle.Render(fmt.Sprintf(format, a...)))
 }

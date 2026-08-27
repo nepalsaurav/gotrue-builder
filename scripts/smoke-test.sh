@@ -94,12 +94,21 @@ echo "$STATUS_OUT" | grep -q "gotrue-status-test.*no" && pass "unmanaged contain
 echo "$STATUS_OUT" | grep -q "gotrue-kyc.*yes" && pass "kyc flagged managed" || fail "kyc not flagged managed"
 docker rm -f gotrue-status-test >/dev/null 2>&1
 
+step "doctor: whole-system health check"
+"$BIN" doctor
+DOCTOR_EXIT=$?
+[ "$DOCTOR_EXIT" -eq 0 ] && pass "doctor exits 0 when everything is healthy" || fail "doctor should have exited 0 (got $DOCTOR_EXIT)"
+"$BIN" doctor | grep -q "postgres.*OK" && pass "doctor reports postgres OK" || fail "doctor did not report postgres OK"
+"$BIN" doctor | grep -q "tenant kyc.*OK" && pass "doctor reports tenant kyc OK" || fail "doctor did not report tenant kyc OK"
+"$BIN" doctor | grep -q "no backups yet" && pass "doctor warns about missing backups before any have run" || fail "doctor should warn about no backups yet"
+
 step "backup run/list"
 "$BIN" backup run --all
 "$BIN" backup list | grep -q kyc && pass "backup list shows kyc" || fail "backup list missing kyc"
 LATEST_KYC_BACKUP=$(ls -t "$HOME/.gotrue-builder/backups/kyc/"*.sql.gz | head -1)
 [ "$(stat -c %a "$LATEST_KYC_BACKUP")" = "600" ] && pass "backup file is mode 600" || fail "backup file has loose permissions"
 [ "$(stat -c %a "$HOME/.gotrue-builder/backups/kyc")" = "700" ] && pass "backup dir is mode 700" || fail "backup dir has loose permissions"
+"$BIN" doctor | grep -q "kyc backup.*OK" && pass "doctor sees the fresh backup" || fail "doctor did not pick up the fresh backup"
 
 step "key mint + admin API round trip (the abc_project_app admin-provisioning gap)"
 "$BIN" admin create-user --tenant admin --email smoketest@abc.com.np --password 'Sm0keTest!23' --email-confirm >/dev/null
@@ -130,8 +139,10 @@ BEFORE_ID=$(docker inspect -f '{{.Id}}' gotrue-kyc)
 AFTER_ID=$(docker inspect -f '{{.Id}}' gotrue-kyc)
 [ "$BEFORE_ID" = "$AFTER_ID" ] && pass "container untouched on pull failure" || fail "container was touched despite pull failure"
 
-step "tenant config (table) + tenant config set (edit + safe restart)"
-"$BIN" tenant config | grep -q "kyc" && pass "tenant config lists kyc" || fail "tenant config missing kyc"
+step "tenant config (vertical, single-tenant) + tenant config set (edit + safe restart)"
+"$BIN" tenant config >/dev/null 2>&1 && fail "tenant config without --name should require it" || pass "tenant config requires --name"
+"$BIN" tenant config --name kyc | grep -q "API_EXTERNAL_URL" && pass "tenant config shows kyc's full settings" || fail "tenant config missing expected fields for kyc"
+"$BIN" tenant config --name kyc | grep -q "GOTRUE_JWT_SECRET.*(set)" && pass "tenant config masks the JWT secret" || fail "tenant config did not mask the JWT secret"
 "$BIN" tenant config --name admin | grep -q "disabled" && pass "tenant config shows admin signup disabled" || fail "tenant config wrong signup state"
 "$BIN" tenant config set --name kyc --jwt-aud custom-aud --timeout 15s
 grep -q "GOTRUE_JWT_AUD=custom-aud" "$HOME/.gotrue-builder/tenants/kyc.env" && pass "tenant config set applied jwt-aud" || fail "tenant config set did not apply jwt-aud"
