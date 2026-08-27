@@ -1,10 +1,11 @@
-package main
+package gotruectl
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/spf13/cobra"
 )
 
 // Phase-2 path: build supabase/auth from source instead of pulling the
@@ -18,14 +19,19 @@ const (
 	binName        = "gotrue-auth"
 )
 
-func runBuildCmd(args []string) error {
-	fs := flag.NewFlagSet("build", flag.ExitOnError)
-	version := fs.String("version", defaultVersion, "supabase/auth tag to build")
-	dest := fs.String("dest", defaultDest, "directory to copy the built binary into")
-	workdir := fs.String("workdir", ".gotrue-builder-src", "directory to clone supabase/auth source into")
-	fs.Parse(args)
-
-	return build(*version, *workdir, *dest)
+func newBuildCmd() *cobra.Command {
+	var version, dest, workdir string
+	cmd := &cobra.Command{
+		Use:   "build",
+		Short: "Clone and build supabase/auth from source (phase-2 self-built-image path)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return build(version, workdir, dest)
+		},
+	}
+	cmd.Flags().StringVar(&version, "version", defaultVersion, "supabase/auth tag to build")
+	cmd.Flags().StringVar(&dest, "dest", defaultDest, "directory to copy the built binary into")
+	cmd.Flags().StringVar(&workdir, "workdir", ".gotrue-builder-src", "directory to clone supabase/auth source into")
+	return cmd
 }
 
 func build(version, workdir, dest string) error {

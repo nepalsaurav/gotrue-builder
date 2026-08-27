@@ -1,4 +1,4 @@
-package main
+package gotruectl
 
 import (
 	"fmt"
@@ -6,11 +6,16 @@ import (
 	"path/filepath"
 )
 
+// postgresContainerName and gotrueImage are fixed identities, not
+// user-tunable config: the shared Postgres container is always named
+// "postgres" (containers are addressed by name throughout this codebase),
+// and gotrueImage is the pinned default version new tenants are created
+// with (an explicit --version is required to run a different one via
+// `tenant create`'s escape hatch or `update run`). Everything that IS
+// meant to be tunable (postgres image, network/volume names, default
+// site URL/JWT audience, backup dir) lives in Config (config.go) instead.
 const (
-	networkName           = "gotrue-net"
-	volumeName            = "gotrue-postgres-data"
 	postgresContainerName = "postgres"
-	postgresImage         = "postgres:15-alpine"
 	gotrueImage           = "supabase/auth:v2.196.0"
 )
 
@@ -44,4 +49,9 @@ func postgresEnvPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(base, "postgres.env"), nil
+}
+
+// tenantBackupDir returns <backupDir>/<tenant>, creating nothing itself.
+func tenantBackupDir(backupDir, tenant string) string {
+	return filepath.Join(backupDir, tenant)
 }

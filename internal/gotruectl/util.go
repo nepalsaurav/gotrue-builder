@@ -1,4 +1,4 @@
-package main
+package gotruectl
 
 import (
 	"crypto/rand"
@@ -65,4 +65,19 @@ func generateSecret(n int) (string, error) {
 		return "", fmt.Errorf("generating random secret: %w", err)
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// replaceEnvValue rewrites the value of a KEY=... line in a godotenv-style
+// file's content, leaving every other line untouched. Errors (key not
+// found) are the caller's problem to check via the returned bool.
+func replaceEnvValue(content, key, newValue string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	found := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, key+"=") {
+			lines[i] = key + "=" + newValue
+			found = true
+		}
+	}
+	return strings.Join(lines, "\n"), found
 }

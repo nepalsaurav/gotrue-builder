@@ -213,3 +213,83 @@ the SDK is justified once you need things a CLI wrapper can't do cleanly
 - `supabase/auth` is pure Go, builds fine with `CGO_ENABLED=0` cross-compiled
   for `linux/amd64` and `linux/arm64` — relevant only if/when phase 2
   (self-built image) happens.
+
+---
+
+## v1 status: done
+
+`docker.go`, `postgres up/down`, and the full `tenant create/list/logs/
+start/stop/delete` lifecycle from the build order above were implemented
+and verified end-to-end against real Docker (two concurrent tenants,
+independent schemas/signup settings, idempotent role/db provisioning,
+`--keep-data` delete+recreate). One real bug was caught and fixed during
+that testing: recreating a tenant after `--keep-data` generated a fresh DB
+password for the new env file without updating the actual Postgres role,
+causing GoTrue to fail SASL auth — fixed by re-syncing the role's password
+via `ALTER ROLE` on every `tenant create`, not just on first creation.
+
+## v2: Cobra/Viper rewrite + status/backup/update/admin — done
+
+Built directly on v1's business logic (`postgresUp`, `ensureTenantDB`,
+etc.) — only the argument-parsing/dispatch layer changed. Every item below
+is implemented, tested against real Docker, and documented in `README.md`
+(the command reference there is more current than this section — treat
+this as a changelog, README as the source of truth).
+
+- **CLI framework**: rewritten onto [Cobra](https://github.com/spf13/cobra)
+  (was: stdlib `flag` + a hand-rolled `switch` in `main.go`). Repo
+  restructured to the standard `cmd/<binary>/main.go` +
+  `internal/<pkg>/*.go` layout specifically so `go install
+  github.com/nepalsaurav/gotrue-builder/cmd/gotruectl@latest` installs a
+  binary correctly named `gotruectl` (previously the module's bare name).
+  `gotruectl self-update [--version TAG]` re-runs that install command for
+  convenience.
+- **Layered config**: [Viper](https://github.com/spf13/viper), precedence
+  flags → `GOTRUCTL_*` env → `~/.gotrue-builder/config.yaml` (path
+  overridable via `--config`) → defaults. Resolved the "port allocation"
+  question above as planned: `--port` stays explicit, no auto-pick.
+  `gotruectl config show` / `config set-smtp` manage it.
+- **SMTP config**: `smtp_*` config keys + `config set-smtp`, consumed by
+  `tenant create` (with `--smtp-*` flags as a per-tenant override) to wire
+  `GOTRUE_SMTP_*`/`GOTRUE_EXTERNAL_EMAIL_ENABLED` into the tenant's env
+  file — not interactively prompted per tenant (unlike the other create
+  options) since re-entering mail credentials on every tenant would be
+  tedious; it's a set-once config concern instead.
+- **`status`**: resolves the "admin ops panel" open question's prerequisite
+  differently than sketched — instead of a separate web UI, `status` lists
+  every container running a `supabase/auth` image on the host (not just
+  `managed-by=gotruectl` ones), with a `MANAGED` column, so it also
+  surfaces instances started some other way.
+- **`backup run`/`backup list`**: resolves the "Backups" open question
+  above — implemented as `pg_dump --schema=auth` per tenant (not
+  `pg_dumpall`, so it's just the GoTrue-owned data, not all of Postgres),
+  gzipped, timestamped, under `backup_dir` from config. No restore command
+  (noted as a non-goal — restoring is materially riskier and wasn't asked
+  for).
+- **`update run`**: blue/green swap for changing a tenant's GoTrue
+  version — rename+stop the old container, pull-then-start the new one,
+  health-check with a timeout, automatic rollback (restore the exact
+  previous container) on any failure. `--image` overrides the constructed
+  `supabase/auth:<version>` entirely, which is both the phase-2
+  self-built-image deployment path and how the rollback path itself gets
+  tested (point it at a non-GoTrue image that won't answer `/health`).
+- **`update rotate-jwt-secret`**: reuses the exact same swap/rollback
+  mechanism as `update run` (shared `swapContainer` function) to safely
+  change a running tenant's `GOTRUE_JWT_SECRET` in place.
+- **`key` / `admin create-user` / `admin list-users`**: implements the
+  "Minting a service_role JWT" fact above using
+  `github.com/golang-jwt/jwt/v5` (not hand-rolled HMAC/base64url) — reads
+  the target tenant's own `GOTRUE_JWT_SECRET` back out of its `.env` file,
+  mints a short-lived `service_role` token, and calls that tenant's
+  `/admin/*` API. `admin create-user` is exactly the missing piece found in
+  `abc_project_app`'s own admin-user endpoint: that endpoint creates a
+  local database row but never a matching GoTrue identity, so an
+  admin-provisioned account has no way to actually log in.
+
+Deliberately **not** done, decided explicitly when asked: a background
+daemon for `status`, a built-in scheduler for `backup`, or switching from
+shelling out to the `docker` CLI to the Docker Go SDK
+(`github.com/docker/docker/client`) — all three were raised mid-session and
+declined in favor of what's above, for the same "thin wrapper, no
+speculative infra" reasoning as the original phase-2/SDK calls earlier in
+this document.

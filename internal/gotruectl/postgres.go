@@ -1,4 +1,4 @@
-package main
+package gotruectl
 
 import (
 	"fmt"
@@ -6,33 +6,51 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
-func runPostgresCmd(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: gotruectl postgres up|down")
+func newPostgresCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "postgres",
+		Short: "Manage the shared Postgres container every tenant's database lives in",
 	}
-	switch args[0] {
-	case "up":
-		return postgresUp()
-	case "down":
-		return postgresDown()
-	default:
-		return fmt.Errorf("unknown postgres subcommand %q (want up|down)", args[0])
-	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "up",
+		Short: "Start the shared postgres container (idempotent)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return postgresUp(cfg)
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "down",
+		Short: "Stop the shared postgres container (data stays in the volume)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			return postgresDown(cfg)
+		},
+	})
+	return cmd
 }
 
 // postgresUp is idempotent: safe to call directly or as a dependency of
 // `tenant create`. It starts the shared postgres container if stopped, or
 // creates it from scratch on first run.
-func postgresUp() error {
+func postgresUp(cfg *Config) error {
 	if err := dockerAvailable(); err != nil {
 		return err
 	}
-	if err := ensureNetwork(networkName); err != nil {
+	if err := ensureNetwork(cfg.Network); err != nil {
 		return err
 	}
-	if err := ensureVolume(volumeName); err != nil {
+	if err := ensureVolume(cfg.Volume); err != nil {
 		return err
 	}
 
@@ -60,13 +78,13 @@ func postgresUp() error {
 	fmt.Println("creating postgres container ...")
 	if err := runInherit("", "docker", "run", "-d",
 		"--name", postgresContainerName,
-		"--network", networkName,
+		"--network", cfg.Network,
 		"--label", managedByLabel,
 		"--label", "role=postgres",
 		"-e", "POSTGRES_PASSWORD="+password,
-		"-v", volumeName+":/var/lib/postgresql/data",
+		"-v", cfg.Volume+":/var/lib/postgresql/data",
 		"--restart", "unless-stopped",
-		postgresImage,
+		cfg.PostgresImage,
 	); err != nil {
 		return fmt.Errorf("running postgres container: %w", err)
 	}
@@ -74,7 +92,7 @@ func postgresUp() error {
 	return waitForPostgresReady()
 }
 
-func postgresDown() error {
+func postgresDown(cfg *Config) error {
 	exists, running, err := containerState(postgresContainerName)
 	if err != nil {
 		return err
@@ -86,7 +104,7 @@ func postgresDown() error {
 	if err := runInherit("", "docker", "stop", postgresContainerName); err != nil {
 		return fmt.Errorf("stopping postgres: %w", err)
 	}
-	fmt.Println("postgres stopped (data preserved in volume", volumeName+")")
+	fmt.Println("postgres stopped (data preserved in volume", cfg.Volume+")")
 	return nil
 }
 
