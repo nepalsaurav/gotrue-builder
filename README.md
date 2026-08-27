@@ -201,21 +201,36 @@ call it, over the internal network, using a `service_role` token minted
 from the tenant's own `GOTRUE_JWT_SECRET` (`gotruectl key` / `gotruectl
 admin`) — that's the entire point of this command existing.
 
-### `backup` — dump tenant user data
+### `backup` — dump, restore, and list tenant user data
 
 ```sh
 gotruectl backup run --tenant kyc
 gotruectl backup run --all
 gotruectl backup list [--tenant kyc]
+gotruectl backup restore --tenant kyc [--file PATH] [--yes]
 ```
 
-`pg_dump`s the tenant's `auth` schema (users, identities, sessions,
-refresh_tokens, MFA factors — everything GoTrue owns) inside the Postgres
-container, gzips it, and writes it to
-`<backup_dir>/<tenant>/<tenant>-<UTC timestamp>.sql.gz` (mode 600). No
-restore command yet — restoring is a separate, materially riskier
-operation; for now, `gunzip | docker exec -i postgres psql -U postgres -d gotrue_<name>`
-does it manually.
+`backup run` `pg_dump`s the tenant's `auth` schema (users, identities,
+sessions, refresh_tokens, MFA factors — everything GoTrue owns) inside the
+Postgres container, gzips it, and writes it to
+`<backup_dir>/<tenant>/<tenant>-<UTC timestamp>.sql.gz` (mode 600).
+
+`backup restore` is the riskiest command in `gotruectl` — it **replaces**
+everything currently in the tenant's `auth` schema with the backup's
+contents — so it's deliberately defensive:
+1. takes a fresh safety backup of the tenant's *current* state first, so a
+   restore against the wrong file (or one you didn't mean to run) is
+   itself undoable;
+2. asks for confirmation unless `--yes` is passed;
+3. stops the tenant's container during the restore and starts it back up
+   after, so GoTrue never serves requests against a half-restored schema;
+4. aborts on the first SQL error (`psql -v ON_ERROR_STOP=1`) instead of
+   silently continuing past one.
+
+`--file` defaults to the tenant's most recent backup. Verified end-to-end
+in `scripts/smoke-test.sh`: create a user, back up, create a second user,
+restore, confirm the first user's original password still works and the
+second user is gone.
 
 ### `update` — safely change a running tenant's image or JWT secret
 
@@ -336,7 +351,6 @@ entirely (Docker secrets requires Swarm mode, which this tool doesn't use).
 
 ## Non-goals
 
-- **Backup restore** — riskier than backup itself; do it manually for now.
 - **Encrypting backups at rest** — not implemented; the backup directory
   holds plaintext SQL dumps of user tables.
 - **A reverse proxy / TLS** — bring your own (Caddy, nginx, ...) in front of

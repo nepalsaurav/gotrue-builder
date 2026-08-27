@@ -93,9 +93,21 @@ this project's actual size.
   that layer (Docker can't bind two containers to one host port at once).
 - **No automatic "check for latest GoTrue version."** `update run --version`
   is always explicit; no network call to GitHub releases.
-- **No backup restore command** — restoring is materially riskier than
-  backing up and wasn't asked for. Manual restore: `gunzip |
-  docker exec -i postgres psql -U postgres -d gotrue_<name>`.
+- **`backup restore` exists** (no longer a non-goal — explicitly requested)
+  but is deliberately the most defensive command in the codebase: it always
+  takes a fresh safety backup of current state first (so a restore against
+  the wrong file is itself undoable), asks for confirmation unless `--yes`,
+  stops the container during the restore, and runs `psql -v
+  ON_ERROR_STOP=1`. A real bug was caught while testing it: the restore
+  preamble issued its own `CREATE SCHEMA auth AUTHORIZATION <role>` before
+  replaying the dump — but `pg_dump --schema=auth` already emits its own
+  unqualified `CREATE SCHEMA auth;` near the top of the dump, so the two
+  collided (`ERROR: schema "auth" already exists`), aborting before any
+  data was replayed. Only found by actually restoring real data and
+  checking it came back — a schema-shape check wouldn't have caught it.
+  Fixed by dropping the preamble's `CREATE SCHEMA` entirely: running the
+  restore `-U <tenant role>` means the dump's own `CREATE SCHEMA auth;`
+  already creates it correctly owned, no explicit `AUTHORIZATION` needed.
 - **`bubbles/table` doesn't handle ANSI-styled cell content correctly** —
   found by actually running `dashboard` in a `tmux` pane (see the
   `smoke-test` skill): embedding `lipgloss`-colored status text into

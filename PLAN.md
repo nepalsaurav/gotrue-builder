@@ -406,3 +406,35 @@ this document.
   before deploying, and the route allowlist is explicitly flagged as
   "verify against your GoTrue version, not guaranteed exhaustive" rather
   than presented as authoritative.
+
+## v2.3: backup restore — done
+
+Previously a stated non-goal ("restoring is materially riskier... wasn't
+asked for"); reversed once it was explicitly requested, picked over
+rate-limit config as the higher-priority gap when offered both. Built as
+the most defensive command in the codebase given it's also the most
+destructive: automatic safety backup of current state before any restore
+proceeds, confirmation required unless `--yes`, container stopped during
+the restore and restarted after, `psql -v ON_ERROR_STOP=1` so a partial
+failure surfaces as an error instead of silently leaving a half-restored
+schema.
+
+**Real bug found by actually restoring real data, not by review**: the
+first version's restore preamble ran `DROP SCHEMA IF EXISTS auth CASCADE;
+CREATE SCHEMA auth AUTHORIZATION <role>;` before replaying the dump — but
+`pg_dump --schema=auth` already emits its own unqualified `CREATE SCHEMA
+auth;` near the top of the dump output. The two collided (`ERROR: schema
+"auth" already exists`), which aborted the restore immediately after the
+DROP succeeded but before any table or data statement ran — leaving the
+tenant's schema empty until GoTrue's own container-restart migration path
+quietly rebuilt an empty schema shell (correct structure, zero rows, no
+error visible anywhere). The failed run's own automatic safety backup
+(taken moments earlier, containing three real test users) was what made
+recovery possible: restored from it after removing the preamble's
+`CREATE SCHEMA` (the dump's own statement, run `-U <tenant role>`, already
+creates it correctly owned — no explicit `AUTHORIZATION` needed). Confirmed
+fixed with a full round trip: create user, back up, create a second user,
+restore, verify the first user's original password still authenticates
+and the second user is gone — this exact sequence is now
+`scripts/smoke-test.sh`'s "backup restore" step, plus a check that
+restoring without `--yes` and empty stdin aborts without touching data.

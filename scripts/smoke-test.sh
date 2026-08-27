@@ -151,6 +151,27 @@ wait_healthy 19999 "kyc after config set"
 grep -q "no changes" /tmp/config-set-noop.out && pass "tenant config set is a no-op when nothing changed" || fail "tenant config set should have reported no changes"
 rm -f /tmp/config-set-noop.out
 
+step "backup restore: full data-integrity round trip (this is the risky one)"
+"$BIN" admin create-user --tenant kyc --email restoreA@example.com --password 'RestoreA123!' --email-confirm >/dev/null
+"$BIN" backup run --tenant kyc >/dev/null
+"$BIN" admin create-user --tenant kyc --email restoreB@example.com --password 'RestoreB123!' --email-confirm >/dev/null
+BEFORE_COUNT=$("$BIN" admin list-users --tenant kyc | grep -c '"email"')
+[ "$BEFORE_COUNT" -ge 2 ] && pass "both restoreA and restoreB present before restore" || fail "expected at least 2 users before restore, got $BEFORE_COUNT"
+"$BIN" backup restore --tenant kyc --yes
+wait_healthy 19999 "kyc after restore"
+AFTER_USERS=$("$BIN" admin list-users --tenant kyc)
+echo "$AFTER_USERS" | grep -qi "restorea@example.com" && pass "restoreA survived the restore (was in the backup)" || fail "restoreA missing after restore"
+echo "$AFTER_USERS" | grep -qi "restoreb@example.com" && fail "restoreB should have been wiped by restore (it postdates the backup)" || pass "restoreB correctly wiped by restore"
+RESTORE_LOGIN=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://localhost:19999/token?grant_type=password" \
+	-H "Content-Type: application/json" -d '{"email":"restorea@example.com","password":"RestoreA123!"}')
+[ "$RESTORE_LOGIN" = "200" ] && pass "restoreA's original password still works after restore" || fail "restoreA cannot log in after restore (got $RESTORE_LOGIN)"
+"$BIN" backup list --tenant kyc | grep -qc . && pass "restore's automatic safety backup is listed" || fail "no safety backup found after restore"
+
+BEFORE_ABORT_COUNT=$("$BIN" admin list-users --tenant kyc | grep -c '"email"')
+"$BIN" backup restore --tenant kyc </dev/null >/dev/null 2>&1
+AFTER_ABORT_COUNT=$("$BIN" admin list-users --tenant kyc | grep -c '"email"')
+[ "$BEFORE_ABORT_COUNT" = "$AFTER_ABORT_COUNT" ] && pass "restore without --yes and empty input aborts, touching nothing" || fail "restore should not have proceeded without confirmation"
+
 step "caddyfile: security-hardened reverse-proxy config generation"
 CADDY_OUT=$("$BIN" caddyfile --tenant kyc --domain auth.example.com)
 echo "$CADDY_OUT" | grep -q "auth.example.com {" && pass "caddyfile targets the right domain" || fail "caddyfile missing domain block"
