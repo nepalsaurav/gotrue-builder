@@ -79,6 +79,17 @@ func dockerExecInherit(container string, args ...string) error {
 	return runInherit("", "docker", full...)
 }
 
+// dockerExecInheritStdin runs `docker exec -i <container> <args...>`,
+// feeding sqlStdin to the command over stdin rather than as a "-c" argument
+// — required whenever the SQL contains a secret (e.g. `CREATE ROLE ...
+// PASSWORD '...'`), since a "-c" value would otherwise sit in that
+// process's argv, visible to any local user via `ps aux` for as long as it
+// runs.
+func dockerExecInheritStdin(container, sqlStdin string, args ...string) error {
+	full := append([]string{"exec", "-i", container}, args...)
+	return runInheritStdin(sqlStdin, "docker", full...)
+}
+
 type containerInfo struct {
 	ID         string `json:"ID"`
 	Names      string `json:"Names"`

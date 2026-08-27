@@ -2,8 +2,6 @@ package gotruectl
 
 import (
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -45,16 +43,15 @@ func readTenantJWTSecret(tenant string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(envPath)
+	env, err := parseEnvFile(envPath)
 	if err != nil {
 		return "", fmt.Errorf("reading tenant %q's env file: %w (has it been created with `tenant create`?)", tenant, err)
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if v, ok := strings.CutPrefix(line, "GOTRUE_JWT_SECRET="); ok {
-			return strings.TrimSpace(v), nil
-		}
+	secret, ok := env["GOTRUE_JWT_SECRET"]
+	if !ok {
+		return "", fmt.Errorf("GOTRUE_JWT_SECRET not found in tenant %q's env file", tenant)
 	}
-	return "", fmt.Errorf("GOTRUE_JWT_SECRET not found in tenant %q's env file", tenant)
+	return secret, nil
 }
 
 // mintServiceRoleJWT builds an HS256 JWT with role=service_role, which

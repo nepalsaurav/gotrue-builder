@@ -5,7 +5,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -19,6 +18,7 @@ func newTenantCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newTenantCreateCmd())
 	cmd.AddCommand(newTenantListCmd())
+	cmd.AddCommand(newTenantConfigCmd())
 	cmd.AddCommand(newTenantLogsCmd())
 	cmd.AddCommand(newTenantStartCmd())
 	cmd.AddCommand(newTenantStopCmd())
@@ -162,7 +162,7 @@ func tenantCreate(cfg *Config, o tenantCreateOpts) error {
 	}
 	resolvedJWTSecret := o.jwtSecret
 	if !o.jwtSecretSet {
-		resolvedJWTSecret = promptString("JWT secret", generatedSecret)
+		resolvedJWTSecret = promptSecret("JWT secret", generatedSecret)
 	}
 	if resolvedJWTSecret == "" {
 		resolvedJWTSecret = generatedSecret
@@ -224,7 +224,7 @@ func tenantCreate(cfg *Config, o tenantCreateOpts) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("provisioning database role/db/schema for %s ...\n", dbRole)
+	printMuted("provisioning database role/db/schema for %s ...", dbRole)
 	if err := ensureTenantDB(dbRole, dbPassword); err != nil {
 		return err
 	}
@@ -279,7 +279,7 @@ func tenantCreate(cfg *Config, o tenantCreateOpts) error {
 		return fmt.Errorf("writing %s: %w", envPath, err)
 	}
 
-	fmt.Println("starting", containerName, "...")
+	printMuted("starting %s ...", containerName)
 	if err := runInherit("", "docker", "run", "-d",
 		"--name", containerName,
 		"--network", cfg.Network,
@@ -294,8 +294,8 @@ func tenantCreate(cfg *Config, o tenantCreateOpts) error {
 		return fmt.Errorf("running %s: %w", containerName, err)
 	}
 
-	fmt.Printf("tenant %q up: %s -> http://localhost:%d\n", tenantName, containerName, tenantPort)
-	fmt.Println("reminder: do not expose the /admin/* routes on this port to the public internet")
+	printSuccess("tenant %q up: %s -> http://localhost:%d", tenantName, containerName, tenantPort)
+	printWarn("reminder: do not expose the /admin/* routes on this port to the public internet")
 	return nil
 }
 
@@ -306,10 +306,13 @@ func ensureTenantDB(role, password string) error {
 	if err != nil {
 		return err
 	}
+	// The password is fed over stdin (dockerExecInheritStdin), not as a "-c"
+	// argument — a "-c 'CREATE ROLE ... PASSWORD ...'" argument would put the
+	// plaintext password in argv, visible to any local user via `ps aux` for
+	// as long as psql is running.
 	if !roleExists {
-		if err := dockerExecInherit(postgresContainerName, "psql", "-U", "postgres", "-c",
-			fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s';", role, password),
-		); err != nil {
+		sql := fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s';", role, password)
+		if err := dockerExecInheritStdin(postgresContainerName, sql, "psql", "-U", "postgres"); err != nil {
 			return fmt.Errorf("creating role %s: %w", role, err)
 		}
 	} else {
@@ -317,9 +320,8 @@ func ensureTenantDB(role, password string) error {
 		// one for the tenant's env file, so an existing role (e.g. kept via
 		// `tenant delete --keep-data`) must be updated to match or GoTrue's
 		// DATABASE_URL auth fails against the old password.
-		if err := dockerExecInherit(postgresContainerName, "psql", "-U", "postgres", "-c",
-			fmt.Sprintf("ALTER ROLE %s PASSWORD '%s';", role, password),
-		); err != nil {
+		sql := fmt.Sprintf("ALTER ROLE %s PASSWORD '%s';", role, password)
+		if err := dockerExecInheritStdin(postgresContainerName, sql, "psql", "-U", "postgres"); err != nil {
 			return fmt.Errorf("updating password for role %s: %w", role, err)
 		}
 	}
@@ -368,16 +370,16 @@ func tenantList() error {
 		return err
 	}
 	if len(containers) == 0 {
-		fmt.Println("no tenants")
+		printMuted("no tenants")
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tPORT\tSTATE\tSTATUS\tIMAGE")
+	rows := make([][]string, 0, len(containers))
 	for _, c := range containers {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", c.label("tenant"), extractHostPort(c.Ports), c.State, c.Status, c.Image)
+		rows = append(rows, []string{c.label("tenant"), extractHostPort(c.Ports), c.State, c.Status, c.Image})
 	}
-	return w.Flush()
+	fmt.Println(renderTable([]string{"NAME", "PORT", "STATE", "STATUS", "IMAGE"}, rows))
+	return nil
 }
 
 // extractHostPort pulls the host-side port out of a docker ps Ports string
@@ -481,7 +483,7 @@ func tenantStartStop(name string, start bool) error {
 	if err := runInherit("", "docker", action, containerName); err != nil {
 		return fmt.Errorf("%s %s: %w", action, containerName, err)
 	}
-	fmt.Printf("%s %s\n", containerName, verb)
+	printSuccess("%s %s", containerName, verb)
 	return nil
 }
 
@@ -522,13 +524,13 @@ func tenantDelete(name string, keepData bool) error {
 	}
 
 	if keepData {
-		fmt.Printf("tenant %q deleted (data kept: role/db gotrue_%s)\n", name, name)
+		printSuccess("tenant %q deleted (data kept: role/db gotrue_%s)", name, name)
 		return nil
 	}
 
 	_, pgRunning, err := containerState(postgresContainerName)
 	if err != nil || !pgRunning {
-		fmt.Printf("tenant %q deleted; postgres isn't running so its database/role were left in place — run `postgres up` then `tenant delete --name %s` again to clean those up\n", name, name)
+		printWarn("tenant %q deleted; postgres isn't running so its database/role were left in place — run `postgres up` then `tenant delete --name %s` again to clean those up", name, name)
 		return nil
 	}
 
@@ -544,6 +546,6 @@ func tenantDelete(name string, keepData bool) error {
 		return fmt.Errorf("dropping role %s: %w", dbRole, err)
 	}
 
-	fmt.Printf("tenant %q deleted (database and role dropped)\n", name)
+	printSuccess("tenant %q deleted (database and role dropped)", name)
 	return nil
 }

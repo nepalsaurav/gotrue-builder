@@ -26,6 +26,21 @@ func promptString(label, def string) string {
 	return line
 }
 
+// promptSecret asks for a value without ever echoing actualDefault to the
+// screen — unlike promptString, which would print a generated secret in
+// cleartext as its bracketed default (visible in terminal scrollback,
+// tmux history, screen recordings, or session logging over SSH). Pressing
+// enter accepts actualDefault silently; typing a value overrides it.
+func promptSecret(label, actualDefault string) string {
+	fmt.Printf("%s [generated, hidden]: ", label)
+	line, _ := stdin.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return actualDefault
+	}
+	return line
+}
+
 // promptRequired keeps asking until a non-empty value is given.
 func promptRequired(label string) string {
 	for {

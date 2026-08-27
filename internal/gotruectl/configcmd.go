@@ -27,19 +27,22 @@ func newConfigShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("config file:        %s\n", configPath())
-			fmt.Printf("postgres_image:     %s\n", cfg.PostgresImage)
-			fmt.Printf("network:            %s\n", cfg.Network)
-			fmt.Printf("volume:             %s\n", cfg.Volume)
-			fmt.Printf("default_site_url:   %s\n", cfg.DefaultSiteURL)
-			fmt.Printf("default_jwt_aud:    %s\n", cfg.DefaultJWTAud)
-			fmt.Printf("backup_dir:         %s\n", cfg.BackupDir)
-			fmt.Printf("smtp_host:          %s\n", cfg.SMTPHost)
-			fmt.Printf("smtp_port:          %s\n", cfg.SMTPPort)
-			fmt.Printf("smtp_user:          %s\n", cfg.SMTPUser)
-			fmt.Printf("smtp_pass:          %s\n", maskSecret(cfg.SMTPPass))
-			fmt.Printf("smtp_admin_email:   %s\n", cfg.SMTPAdminEmail)
-			fmt.Printf("smtp_sender_name:   %s\n", cfg.SMTPSenderName)
+			printMuted("config file: %s", configPath())
+			rows := [][]string{
+				{"postgres_image", cfg.PostgresImage},
+				{"network", cfg.Network},
+				{"volume", cfg.Volume},
+				{"default_site_url", cfg.DefaultSiteURL},
+				{"default_jwt_aud", cfg.DefaultJWTAud},
+				{"backup_dir", cfg.BackupDir},
+				{"smtp_host", cfg.SMTPHost},
+				{"smtp_port", cfg.SMTPPort},
+				{"smtp_user", cfg.SMTPUser},
+				{"smtp_pass", maskSecret(cfg.SMTPPass)},
+				{"smtp_admin_email", cfg.SMTPAdminEmail},
+				{"smtp_sender_name", cfg.SMTPSenderName},
+			}
+			fmt.Println(renderTable([]string{"SETTING", "VALUE"}, rows))
 			return nil
 		},
 	}
@@ -126,6 +129,6 @@ func saveSMTPConfig(host, port, user, pass, adminEmail, senderName string) error
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	_ = os.Chmod(path, 0o600) // holds the SMTP password in plaintext
-	fmt.Println("SMTP config saved to", path)
+	printSuccess("SMTP config saved to %s", path)
 	return nil
 }

@@ -92,6 +92,10 @@ gotruectl tenant create --name kyc --port 9999 [--signup] \
     [--smtp-host H] [--smtp-port P] [--smtp-user U] [--smtp-pass P] \
     [--smtp-admin-email E] [--smtp-sender-name N]
 gotruectl tenant list
+gotruectl tenant config [--name kyc]
+gotruectl tenant config set --name kyc [--site-url URL] [--external-url URL] \
+    [--jwt-aud AUD] [--signup] [--smtp-host H] [--smtp-port P] [--smtp-user U] \
+    [--smtp-pass P] [--smtp-admin-email E] [--smtp-sender-name N] [--timeout 30s]
 gotruectl tenant logs --name kyc [--follow]
 gotruectl tenant start --name kyc
 gotruectl tenant stop  --name kyc
@@ -107,6 +111,16 @@ override, so you're not asked to re-enter mail server credentials on every
 
 Ensures Postgres is up automatically. Reminder printed on every create:
 don't expose a tenant's `/admin/*` routes to the public internet.
+
+`tenant config` prints a table of every tenant's actual GoTrue-level
+settings (port, URLs, JWT audience, signup, SMTP host) read back from its
+`.env` file — `tenant list` only shows docker-level state/status/image, not
+these. `tenant config set` edits one or more of those settings and applies
+them via the same safe blue/green swap `update run` uses (same image, just
+the updated env; automatic rollback if the container doesn't come back
+healthy). It cannot change the host port or JWT secret — recreate the
+tenant for the former, use `update rotate-jwt-secret` for the latter, since
+that needs its own "tokens are now invalid" warning.
 
 ### `status` — every GoTrue container on the host, managed or not
 
@@ -197,6 +211,61 @@ to `<dest>/gotrue-auth`. Not used by `postgres`/`tenant` (which always pull
 the official image) — this is only for when you need a patched GoTrue or an
 offline build. `update run --image <your-built-image>` is how you'd deploy
 that build's image to a tenant afterward.
+
+## Security
+
+**Is GoTrue itself secure?** GoTrue (`supabase/auth`) is mature, actively
+maintained, and the same code Supabase runs in production: bcrypt password
+hashing, HS256-signed JWTs, TOTP MFA, configurable rate limiting. Its
+security in *this* deployment depends on how it's operated, which is where
+the real risk lives:
+
+- **This tool never sets up TLS.** Every tenant defaults to plain
+  `http://localhost:<port>`. Credentials, tokens, and OTP codes all travel
+  in clear text until you put a TLS-terminating reverse proxy (Caddy,
+  nginx, whatever you already run) in front — **do this before exposing
+  any tenant port beyond localhost.** Not this tool's job; see `PLAN.md`.
+- **Never expose a tenant's `/admin/*` routes publicly** — printed as a
+  reminder on every `tenant create`. Anyone who can reach them with a valid
+  `service_role` token (see `key`/`admin`) can create, list, and ban users.
+- **Backups are not just user data — they contain live-usable tokens.**
+  `confirmation_token`, `recovery_token`, and `email_change_token_new` in
+  the dumped `auth.users` table can complete a password-reset or email
+  takeover if they're still unexpired when someone gets hold of a backup
+  file. Treat `backup_dir` as being as sensitive as the database itself
+  (it's already mode 700/600 — see below — but that's not encryption).
+- **JWT secrets are single points of failure per tenant.** A leaked
+  `GOTRUE_JWT_SECRET` lets an attacker mint their own `service_role` token
+  for that tenant. Rotate it with `update rotate-jwt-secret` if you suspect
+  exposure — it invalidates every existing token for that tenant.
+
+**What this tool does to avoid leaking secrets itself** (all verified by
+`scripts/smoke-test.sh`, not just asserted):
+
+- Every file holding a secret (`postgres.env`, `config.yaml`, tenant
+  `.env` files, backup dumps) is written mode `600`; their containing
+  directories are `700`.
+- Interactive prompts never echo a generated secret back to the screen —
+  `tenant create`'s JWT-secret prompt shows `[generated, hidden]`, not the
+  actual value, so it can't end up in terminal scrollback, tmux history,
+  or a recorded session.
+- Secrets are never passed as plaintext `docker run`/`docker exec`
+  command-line arguments, which any local user can read via `ps aux` or
+  `/proc/<pid>/cmdline` for as long as that process runs. `POSTGRES_PASSWORD`
+  is handed to `docker run` via a bare `-e POSTGRES_PASSWORD` (Docker reads
+  it from this program's own environment instead); `CREATE ROLE ...
+  PASSWORD` is sent to `psql` over stdin instead of as a `-c` argument.
+- `key`'s minted token and `admin`'s JSON output are deliberately left
+  **uncolored** even though everything else uses styled output — an
+  embedded ANSI escape code would corrupt a captured token or piped JSON.
+
+**What this tool can't fix, because it's inherent to Docker**: any secret
+passed via `-e` or `--env-file` ends up in that container's stored config,
+readable by anyone who can run `docker inspect` on the host. The trust
+boundary is "who has Docker access on this machine," same as any other
+Docker Compose or `docker run`-based deployment — not something a CLI
+wrapper can change without moving to a different secrets mechanism
+entirely (Docker secrets requires Swarm mode, which this tool doesn't use).
 
 ## Non-goals
 

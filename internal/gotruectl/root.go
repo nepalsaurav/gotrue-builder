@@ -6,18 +6,28 @@ package gotruectl
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
 )
 
-// Version is set at build time via -ldflags "-X .../internal/gotruectl.Version=...".
-var Version = "dev"
+// version reads the module version Go's own toolchain embeds into the
+// binary at `go install module@version` time (any version — a tag or
+// @latest) — no -ldflags injection needed, and it stays correct regardless
+// of how the binary was installed.
+func version() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" {
+		return "dev"
+	}
+	return info.Main.Version
+}
 
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "gotruectl",
 		Short:         "Manage a local Docker-based GoTrue setup: shared Postgres + per-tenant GoTrue containers",
-		Version:       Version,
+		Version:       version(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -39,7 +49,7 @@ func newRootCmd() *cobra.Command {
 // Execute runs the CLI; cmd/gotruectl's main() just calls this.
 func Execute() {
 	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		fmt.Fprintln(os.Stderr, errorStyle.Render("error:"), err)
 		os.Exit(1)
 	}
 }

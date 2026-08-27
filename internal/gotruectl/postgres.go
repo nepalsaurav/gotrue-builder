@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -59,7 +58,7 @@ func postgresUp(cfg *Config) error {
 		return fmt.Errorf("checking postgres container: %w", err)
 	}
 	if running {
-		fmt.Println("postgres already running")
+		printMuted("postgres already running")
 		return nil
 	}
 	if exists {
@@ -76,12 +75,17 @@ func postgresUp(cfg *Config) error {
 	}
 
 	fmt.Println("creating postgres container ...")
-	if err := runInherit("", "docker", "run", "-d",
+	// POSTGRES_PASSWORD is passed as a bare "-e POSTGRES_PASSWORD" (no
+	// value) plus the value in this *process's own* environment — never as
+	// "-e POSTGRES_PASSWORD=<value>", which would put the plaintext
+	// password in argv, visible to any local user via `ps aux` for as long
+	// as this docker run invocation is executing.
+	if err := runInheritWithSecretEnv("POSTGRES_PASSWORD", password, "docker", "run", "-d",
 		"--name", postgresContainerName,
 		"--network", cfg.Network,
 		"--label", managedByLabel,
 		"--label", "role=postgres",
-		"-e", "POSTGRES_PASSWORD="+password,
+		"-e", "POSTGRES_PASSWORD",
 		"-v", cfg.Volume+":/var/lib/postgresql/data",
 		"--restart", "unless-stopped",
 		cfg.PostgresImage,
@@ -98,13 +102,13 @@ func postgresDown(cfg *Config) error {
 		return err
 	}
 	if !exists || !running {
-		fmt.Println("postgres not running")
+		printMuted("postgres not running")
 		return nil
 	}
 	if err := runInherit("", "docker", "stop", postgresContainerName); err != nil {
 		return fmt.Errorf("stopping postgres: %w", err)
 	}
-	fmt.Println("postgres stopped (data preserved in volume", cfg.Volume+")")
+	printSuccess("postgres stopped (data preserved in volume %s)", cfg.Volume)
 	return nil
 }
 
@@ -112,7 +116,8 @@ func waitForPostgresReady() error {
 	fmt.Print("waiting for postgres to accept connections ")
 	for i := 0; i < 30; i++ {
 		if _, err := dockerExecCapture(postgresContainerName, "pg_isready", "-U", "postgres"); err == nil {
-			fmt.Println(" ready")
+			fmt.Println()
+			printSuccess("postgres ready")
 			return nil
 		}
 		fmt.Print(".")
@@ -131,11 +136,9 @@ func readOrCreatePostgresPassword() (string, error) {
 		return "", err
 	}
 
-	if data, err := os.ReadFile(path); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if v, ok := strings.CutPrefix(line, "POSTGRES_PASSWORD="); ok {
-				return strings.TrimSpace(v), nil
-			}
+	if env, err := parseEnvFile(path); err == nil {
+		if v, ok := env["POSTGRES_PASSWORD"]; ok {
+			return v, nil
 		}
 	}
 

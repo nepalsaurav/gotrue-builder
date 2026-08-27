@@ -86,17 +86,17 @@ func updateTenant(cfg *Config, tenant, version, image string, timeout time.Durat
 		targetImage = "supabase/auth:" + version
 	}
 
-	fmt.Println("pulling", targetImage, "...")
+	printMuted("pulling %s ...", targetImage)
 	if err := dockerPull(targetImage); err != nil {
 		return err // old container never touched
 	}
 
-	fmt.Printf("swapping %s to %s ...\n", containerName, targetImage)
+	printMuted("swapping %s to %s ...", containerName, targetImage)
 	if err := swapContainer(tenant, targetImage, cfg.Network, timeout); err != nil {
 		return err
 	}
 
-	fmt.Printf("tenant %q updated to %s\n", tenant, targetImage)
+	printSuccess("tenant %q updated to %s", tenant, targetImage)
 	return nil
 }
 
@@ -124,58 +124,83 @@ func newUpdateRotateJWTCmd() *cobra.Command {
 }
 
 func rotateTenantJWTSecret(cfg *Config, tenant, secret string, timeout time.Duration) error {
-	containerName := "gotrue-" + tenant
-	exists, running, err := containerState(containerName)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("no such tenant %q", tenant)
-	}
-	if !running {
-		return fmt.Errorf("tenant %q is not running — `tenant start --name %s` first", tenant, tenant)
-	}
-
-	envPath, err := tenantEnvPath(tenant)
-	if err != nil {
-		return err
-	}
-	oldContent, err := os.ReadFile(envPath)
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", envPath, err)
-	}
-
 	if secret == "" {
+		var err error
 		secret, err = generateSecret(32)
 		if err != nil {
 			return err
 		}
 	}
-	newContent, found := replaceEnvValue(string(oldContent), "GOTRUE_JWT_SECRET", secret)
-	if !found {
-		return fmt.Errorf("GOTRUE_JWT_SECRET not found in %s", envPath)
+
+	printMuted("rotating JWT secret for %q ...", tenant)
+	changed, err := applyEnvChangesAndRestart(cfg, tenant, map[string]string{"GOTRUE_JWT_SECRET": secret}, timeout)
+	if err != nil {
+		return err
 	}
+	if !changed {
+		printMuted("secret unchanged (same value already set)")
+		return nil
+	}
+
+	printSuccess("tenant %q JWT secret rotated", tenant)
+	printWarn("note: every previously issued access/refresh token for this tenant is now invalid")
+	return nil
+}
+
+// applyEnvChangesAndRestart upserts the given KEY=value pairs into a
+// tenant's .env file and, if that actually changed anything, safely
+// restarts the container to pick them up via swapContainer (same
+// image, so only the env changes) — used by both `update
+// rotate-jwt-secret` and `tenant config set`. Returns changed=false
+// (no restart performed) when every requested value already matched.
+func applyEnvChangesAndRestart(cfg *Config, tenant string, changes map[string]string, timeout time.Duration) (changed bool, err error) {
+	containerName := "gotrue-" + tenant
+	exists, running, err := containerState(containerName)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, fmt.Errorf("no such tenant %q", tenant)
+	}
+	if !running {
+		return false, fmt.Errorf("tenant %q is not running — `tenant start --name %s` first", tenant, tenant)
+	}
+
+	envPath, err := tenantEnvPath(tenant)
+	if err != nil {
+		return false, err
+	}
+	oldContentBytes, err := os.ReadFile(envPath)
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", envPath, err)
+	}
+	oldContent := string(oldContentBytes)
+
+	newContent := oldContent
+	for key, value := range changes {
+		newContent = upsertEnvValue(newContent, key, value)
+	}
+	if newContent == oldContent {
+		return false, nil
+	}
+
 	if err := os.WriteFile(envPath, []byte(newContent), 0o600); err != nil {
-		return fmt.Errorf("writing %s: %w", envPath, err)
+		return false, fmt.Errorf("writing %s: %w", envPath, err)
 	}
 
 	image, err := runCapture("", "docker", "inspect", "-f", "{{.Config.Image}}", containerName)
 	if err != nil {
-		_ = os.WriteFile(envPath, oldContent, 0o600)
-		return fmt.Errorf("reading current image for %s: %w", containerName, err)
+		_ = os.WriteFile(envPath, oldContentBytes, 0o600)
+		return false, fmt.Errorf("reading current image for %s: %w", containerName, err)
 	}
 
-	fmt.Printf("rotating JWT secret for %q ...\n", tenant)
 	if err := swapContainer(tenant, image, cfg.Network, timeout); err != nil {
-		// swapContainer already rolled the container back to the old one
-		// (old secret) — keep the env file in sync with what's actually running.
-		_ = os.WriteFile(envPath, oldContent, 0o600)
-		return err
+		// swapContainer already rolled the container back to the old one —
+		// keep the env file in sync with what's actually running.
+		_ = os.WriteFile(envPath, oldContentBytes, 0o600)
+		return false, err
 	}
-
-	fmt.Printf("tenant %q JWT secret rotated\n", tenant)
-	fmt.Println("note: every previously issued access/refresh token for this tenant is now invalid")
-	return nil
+	return true, nil
 }
 
 // swapContainer is the shared blue/green mechanism behind `update run` and

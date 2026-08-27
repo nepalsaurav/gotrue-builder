@@ -114,7 +114,7 @@ func backupTenant(cfg *Config, tenant string) error {
 		return fmt.Errorf("finalizing %s: %w", destPath, err)
 	}
 
-	fmt.Printf("backed up %q -> %s\n", tenant, destPath)
+	printSuccess("backed up %q -> %s", tenant, destPath)
 	return nil
 }
 
@@ -148,7 +148,7 @@ func backupList(cfg *Config, tenant string) error {
 		dirEntries, err := os.ReadDir(cfg.BackupDir)
 		if err != nil {
 			if os.IsNotExist(err) {
-				fmt.Println("no backups yet")
+				printMuted("no backups yet")
 				return nil
 			}
 			return fmt.Errorf("reading %s: %w", cfg.BackupDir, err)
@@ -177,13 +177,15 @@ func backupList(cfg *Config, tenant string) error {
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("no backups yet")
+		printMuted("no backups yet")
 		return nil
 	}
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].info.ModTime().Before(entries[j].info.ModTime()) })
+	rows := make([][]string, 0, len(entries))
 	for _, e := range entries {
-		fmt.Printf("%s\t%8d bytes\t%s\t%s\n", e.tenant, e.info.Size(), e.info.ModTime().Format(time.RFC3339), e.path)
+		rows = append(rows, []string{e.tenant, fmt.Sprintf("%d bytes", e.info.Size()), e.info.ModTime().Format(time.RFC3339), e.path})
 	}
+	fmt.Println(renderTable([]string{"TENANT", "SIZE", "MODIFIED", "PATH"}, rows))
 	return nil
 }

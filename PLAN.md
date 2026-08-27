@@ -293,3 +293,65 @@ shelling out to the `docker` CLI to the Docker Go SDK
 declined in favor of what's above, for the same "thin wrapper, no
 speculative infra" reasoning as the original phase-2/SDK calls earlier in
 this document.
+
+## v2.1: tenant config, security hardening, colorful UI, standalone docs — done
+
+- **`tenant config` / `tenant config set`**: a table of each tenant's
+  actual GoTrue-level settings (port, URLs, JWT audience, signup, SMTP
+  host) read from its `.env` file — `tenant list` only shows docker-level
+  state. `config set` edits one or more settings and applies them via the
+  same `swapContainer` blue/green mechanism `update run` uses, generalized
+  into a shared `applyEnvChangesAndRestart` helper that `update
+  rotate-jwt-secret` was refactored to use too, rather than duplicating the
+  rename/stop/run/health-check/rollback sequence a third time.
+- **Security audit and fixes**, prompted by an explicit "make sure nothing
+  leaks" ask — three real issues found and fixed, all now covered by
+  `scripts/smoke-test.sh` assertions (file permission checks, and a check
+  that the generated JWT secret never appears in captured command output):
+  1. `postgres up`'s `docker run -e POSTGRES_PASSWORD=<value>` put the
+     plaintext password in argv (readable via `ps aux`/`/proc/<pid>/cmdline`
+     for any local user during the command's run) — switched to a bare
+     `-e POSTGRES_PASSWORD` plus the value in the subprocess's own
+     environment (`runInheritWithSecretEnv`).
+  2. `ensureTenantDB`'s `CREATE ROLE ... PASSWORD '...'`/`ALTER ROLE`
+     had the same argv exposure via `psql -c` — switched to feeding the SQL
+     over stdin (`dockerExecInheritStdin`).
+  3. `tenant create`'s interactive JWT-secret prompt echoed the actual
+     generated secret as its bracketed default, visible in terminal
+     scrollback/session recordings — replaced with `promptSecret`, which
+     shows `[generated, hidden]` and never prints the real value.
+  Documented as a full "Security" section in `README.md`: TLS is not this
+  tool's job (mandatory reverse proxy before exposing a tenant port),
+  backups contain live-usable tokens (not just PII), and the Docker-level
+  exposure (`docker inspect` reveals any env-based secret to anyone with
+  Docker access on the host) is inherent to Docker and not fixable by a
+  CLI wrapper without moving to Docker secrets (Swarm-only, out of scope).
+- **Colorful output**: adopted
+  [lipgloss](https://github.com/charmbracelet/lipgloss) (Charm; the
+  standard choice for styled terminal Go output) for bordered tables
+  (`tenant list`, `tenant config`, `status`, `backup list`, `config show`)
+  and green/amber/gray success/warning/muted messages. Deliberately
+  **excluded** from `key`'s token output and `admin`'s JSON — both are
+  meant to be piped or captured, and an embedded ANSI code would corrupt
+  that. lipgloss auto-detects non-TTY/`NO_COLOR` and degrades to plain text
+  on its own, verified by comparing piped vs. pty output.
+- **`gotruectl --version`** now reads the real module version from Go's own
+  `runtime/debug.ReadBuildInfo()` instead of a hardcoded `"dev"` — works
+  automatically for any `go install .../cmd/gotruectl@<version>` with no
+  `-ldflags` needed.
+- **Standalone documentation**: added `CLAUDE.md` (repo orientation for a
+  fresh session — layout, non-negotiable decisions, how to verify a
+  change) and two skills: `smoke-test` (runs the regression suite,
+  explains how to tell a real failure from test flakiness) and `release`
+  (tag-and-push process, including the default-branch pitfall below).
+- **Real install bug hit and fixed**: `go install .../cmd/gotruectl@latest`
+  failed, resolving to a pseudo-version from a commit that predated the
+  entire v1 implementation. Root cause: the GitHub repo's default branch
+  was still `master` (renaming the local branch to `main` doesn't change
+  that remote setting), frozen at an old commit, and Go's `@latest`
+  falls back to the remote's reported default branch whenever no version
+  tag exists. Fixed by setting `main` as the actual default branch
+  (`gh repo edit --default-branch main`) *and*, more durably, tagging a
+  real release (`v0.1.0`) — a semver tag makes `@latest` resolution
+  correct regardless of default-branch state, which the `release` skill
+  now encodes as the required step, not an optional nicety.

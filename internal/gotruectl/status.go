@@ -2,9 +2,7 @@ package gotruectl
 
 import (
 	"fmt"
-	"os"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
@@ -36,12 +34,11 @@ func statusAll() error {
 		}
 	}
 	if len(gotrue) == 0 {
-		fmt.Println("no GoTrue containers found")
+		printMuted("no GoTrue containers found")
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tMANAGED\tTENANT\tPORT\tSTATE\tSTATUS\tIMAGE")
+	rows := make([][]string, 0, len(gotrue))
 	for _, c := range gotrue {
 		managed := "no"
 		tenant := "-"
@@ -50,7 +47,8 @@ func statusAll() error {
 			tenant = c.label("tenant")
 		}
 		name := strings.TrimPrefix(c.Names, "/")
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", name, managed, tenant, extractHostPort(c.Ports), c.State, c.Status, c.Image)
+		rows = append(rows, []string{name, managed, tenant, extractHostPort(c.Ports), c.State, c.Status, c.Image})
 	}
-	return w.Flush()
+	fmt.Println(renderTable([]string{"NAME", "MANAGED", "TENANT", "PORT", "STATE", "STATUS", "IMAGE"}, rows))
+	return nil
 }
